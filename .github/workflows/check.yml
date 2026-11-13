@@ -1,0 +1,14 @@
+name: Check
+on: [push, pull_request]
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+      - run: bash scripts/build-app.sh
+      - run: ditto -c -k --keepParent dist/Margin.app dist/Margin-macOS.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Margin-macOS
+          path: dist/Margin-macOS.zip
