@@ -24,9 +24,9 @@ final class GlobalShortcuts {
             return noErr
         }, 1, &event, pointer, &handler)
         guard status == noErr else { throw ShortcutError.registration(status) }
-        for (id, modifiers) in [(UInt32(1), UInt32(optionKey)), (UInt32(2), UInt32(optionKey | shiftKey))] {
+        for (id, key) in [(UInt32(1), kVK_Space), (UInt32(2), kVK_ANSI_H)] {
             var reference: EventHotKeyRef?
-            let result = RegisterEventHotKey(UInt32(kVK_ANSI_Grave), modifiers,
+            let result = RegisterEventHotKey(UInt32(key), UInt32(controlKey | shiftKey),
                                             EventHotKeyID(signature: 0x4D52474E, id: id),
                                             GetApplicationEventTarget(), 0, &reference)
             guard result == noErr, let reference else { throw ShortcutError.registration(result) }

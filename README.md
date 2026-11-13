@@ -6,10 +6,10 @@ Early prototype for macOS 14 or later. Uses your installed, signed-in [Codex CLI
 
 ## Use
 
-- **Option–backtick** opens a question box beside the pointer. Select text before opening it, or leave the selection empty to ask about the window.
+- **Control–Shift–Space** opens a question box beside the pointer. Select text before opening it, or leave the selection empty to ask about the window.
 - Select more text in the source window and return to the box to include that passage. The source page stays pinned; changing pages requires capturing the new page.
 - The **highlighter** button saves the selected passage without contacting the agent.
-- **Option–Shift–backtick** opens recent conversations, conversations for this page, and its saved highlights.
+- **Control–Shift–H** opens recent conversations, conversations for this page, and its saved highlights.
 - **Ask about this** starts a conversation from a saved highlight. Follow-ups resume that conversation's Codex session.
 - **Escape** closes the panel. **Stop** interrupts the agent request.
 
@@ -40,7 +40,7 @@ Writes replace the library atomically. An interrupted reply stays marked as inte
 - Restored highlights mark visible text lines using text recognition. They do not modify the webpage or PDF. A quote must match uniquely; missing or repeated text stays unpainted and remains in the sidebar. Math, columns, and scanned PDFs can defeat matching.
 - Chrome and Safari page identity uses their URL. Other apps depend on the document URL they expose or their window title; changed titles can create separate records.
 - Each arXiv paper version has its own identity. HTML, abstract, and PDF URLs for the same identifier share a library entry; unrelated query parameters and fragment routes remain significant.
-- The shortcuts use the physical backtick key. Shortcut customization and cross-device sync are not included.
+- Shortcut customization and cross-device sync are not included.
 
 ## Structure
 
