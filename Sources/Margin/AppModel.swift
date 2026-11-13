@@ -227,7 +227,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func cancel() { agent.cancel() }
+    func cancel() { activity = "Stopping…"; agent.cancel() }
 
     func openSource() {
         if let raw = context?.url, let url = URL(string: raw), ["https", "http", "file"].contains(url.scheme) {

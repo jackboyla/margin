@@ -115,9 +115,9 @@ private final class CodexExecution: @unchecked Sendable {
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 2) {
                 if process.isRunning { kill(process.processIdentifier, SIGKILL) }
             }
+        } else {
+            finish(.failure(CancellationError()))
         }
-        try? FileManager.default.removeItem(at: directory)
-        finish(.failure(CancellationError()))
     }
 
     private func finish(_ result: Result<String, Error>) {
@@ -127,6 +127,7 @@ private final class CodexExecution: @unchecked Sendable {
         let continuation = continuation
         self.continuation = nil
         lock.unlock()
+        try? FileManager.default.removeItem(at: directory)
         eventSink.finish()
         continuation?.resume(with: result)
     }
@@ -185,6 +186,10 @@ private final class CodexExecution: @unchecked Sendable {
             }
             process.waitUntilExit()
             readers.wait()
+            lock.lock()
+            let wasCancelled = cancelled
+            lock.unlock()
+            if wasCancelled { throw CancellationError() }
             guard process.terminationReason == .exit, process.terminationStatus == 0 else {
                 throw CodexFailure("Codex stopped (status \(process.terminationStatus)).\(diagnostics.details)")
             }

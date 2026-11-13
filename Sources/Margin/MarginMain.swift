@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @main
@@ -21,12 +22,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var composer: FloatingPanel?
     private var sidebar: FloatingPanel?
     private var overlays: HighlightOverlays?
+    private var layoutSubscription: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
             let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let model = try AppModel(directory: support.appendingPathComponent("Margin", isDirectory: true))
             self.model = model
+            layoutSubscription = model.objectWillChange.sink { [weak self] in
+                DispatchQueue.main.async { self?.fitComposer() }
+            }
             setupMenu()
             overlays = HighlightOverlays(model: model)
             shortcuts.onComposer = { [weak self] in self?.showComposer() }
@@ -89,13 +94,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             composer?.contentView = host
         }
         guard let composer else { return }
+        fitComposer()
         let point = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let height = max(260, composer.frame.height)
+        let height = composer.frame.height
         composer.setFrameOrigin(NSPoint(x: min(max(point.x + 14, visible.minX), visible.maxX - 420),
                                        y: max(visible.minY, min(point.y - height - 12, visible.maxY - height))))
         composer.makeKeyAndOrderFront(nil)
+    }
+
+    private func fitComposer() {
+        guard let composer, let content = composer.contentView else { return }
+        let size = content.fittingSize
+        guard size.height.isFinite, size.height > 0 else { return }
+        let screen = composer.screen ?? NSScreen.main
+        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let height = min(size.height, visible.height - 24)
+        let top = min(composer.frame.maxY, visible.maxY - 12)
+        composer.setFrame(NSRect(x: min(max(composer.frame.minX, visible.minX + 12), visible.maxX - 432),
+                                y: max(visible.minY + 12, top - height), width: 420, height: height), display: true)
     }
 
     private func toggleSidebar() {
