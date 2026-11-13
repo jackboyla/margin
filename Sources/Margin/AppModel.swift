@@ -122,7 +122,7 @@ final class AppModel: ObservableObject {
                 }
                 guard let source = context,
                       let quote = source.selection?.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty else {
-                    error = "Select text in the source window, then press ⌥` to capture it."
+                    error = "Select text in the source window, then press Control–Shift–Space to capture it."
                     return
                 }
                 try update { library in

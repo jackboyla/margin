@@ -13,7 +13,7 @@ struct ComposerView: View {
                 Image(systemName: "text.bubble.fill").foregroundStyle(.orange)
                 Text("Margin").font(.headline)
                 Spacer()
-                Button(action: history) { Image(systemName: "sidebar.right") }.help("Recent threads · ⌥⇧`")
+                Button(action: history) { Image(systemName: "sidebar.right") }.help("Recent threads · ⌃⇧H")
                 Button(action: close) { Image(systemName: "xmark") }.help("Close · Esc")
             }.buttonStyle(.plain)
             ConversationView(model: model)
@@ -58,7 +58,7 @@ struct ConversationView: View {
                     .padding(8).background(.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
                 }
             } else {
-                Text("Open a page or document, then press ⌥` to ask about it.")
+                Text("Open a page or document, then press Control–Shift–Space to ask about it.")
                     .font(.callout).foregroundStyle(.secondary)
             }
 
@@ -149,7 +149,7 @@ struct SidebarView: View {
                     Text("Highlights").tag(2)
                 }.pickerStyle(.segmented)
                 if filter != 0 {
-                    Text(model.pageContext?.title ?? "Capture a window with ⌥` first.")
+                    Text(model.pageContext?.title ?? "Capture a window with Control–Shift–Space first.")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
                 ScrollView {
@@ -208,7 +208,7 @@ struct SettingsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Read where you are.").font(.headline)
-            Text("⌥` opens a question beside your pointer.\n⌥⇧` opens your threads and highlights.").font(.callout)
+            Text("Control–Shift–Space opens a question beside your pointer.\nControl–Shift–H opens your threads and highlights.").font(.callout)
             GroupBox("Window access") {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Margin reads the window you choose. Questions send its captured text and image to your configured Codex agent; saved highlights stay on this Mac.")
