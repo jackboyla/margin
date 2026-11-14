@@ -1,6 +1,6 @@
 # Development and isolated testing
 
-Run `swift test` and `bash scripts/build-app.sh` on a Mac with Xcode and Swift 6.1 or later. The GitHub Actions check also runs the PostgreSQL integration test against a disposable database and packages a DMG. Keep interactive acceptance tests in a full macOS guest when the host Mac is in use: a Space or another Screen Sharing login is not a reliable boundary for display and input changes.
+Run `swift test` and `bash scripts/build-app.sh` on a Mac with Xcode and Swift 6.2 or later. The GitHub Actions check also runs the PostgreSQL integration test against a disposable database and packages a DMG. Keep interactive acceptance tests in a full macOS guest when the host Mac is in use: a Space or another Screen Sharing login is not a reliable boundary for display and input changes.
 
 ## Test guest
 

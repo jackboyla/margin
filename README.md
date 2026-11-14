@@ -32,7 +32,7 @@ By default, notes save immediately on this Mac. The optional PostgreSQL backend 
 
 ## Build
 
-Install Xcode with its macOS SDK and Swift 6.1 or later, then:
+Install Xcode with its macOS SDK and Swift 6.2 or later, then:
 
 ```sh
 swift test

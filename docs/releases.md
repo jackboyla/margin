@@ -2,7 +2,7 @@
 
 ## Build a DMG
 
-On a Mac with Xcode and Swift 6.1 or later, build both architectures and package the app:
+On a Mac with Xcode and Swift 6.2 or later, build both architectures and package the app:
 
 ```sh
 export MARGIN_VERSION=0.1.0
