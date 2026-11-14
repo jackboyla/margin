@@ -6,11 +6,11 @@ For macOS 26 or later. Answer with your signed-in [Codex CLI](https://github.com
 
 ## Demos
 
-Recorded in Chrome on macOS 27.2 with the released beta and a real local Qwen3 model through the API backend. Click a preview to watch. Clips cut idle pauses; playback stays at normal speed.
+Recorded in Chrome on macOS 27.2 with a real local Qwen3 model through the API backend. The restart demonstration uses beta 2; the other clips use beta 1. Click a preview to watch. Clips cut idle pauses; playback stays at normal speed.
 
-| Ask beside the paper | Keep separate threads |
-| --- | --- |
-| [![Watch: open an arXiv PDF, save a highlight and ask a question](docs/media/margin-paper-question.jpg)](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-paper-question.mp4) | [![Watch: save another passage, compare highlights and browse threads](docs/media/margin-multiple-threads.jpg)](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-multiple-threads.mp4) |
+| Ask beside the paper | Keep separate threads | Return to your notes |
+| --- | --- | --- |
+| [![Watch: open an arXiv PDF, save a highlight and ask a question](docs/media/margin-paper-question.jpg)](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-paper-question.mp4) | [![Watch: save another passage, compare highlights and browse threads](docs/media/margin-multiple-threads.jpg)](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-multiple-threads.mp4) | [![Watch: close the paper and app, restore highlights and continue a conversation](docs/media/margin-restore-library.jpg)](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.2/margin-restore-library.mp4) |
 
 Also watch [a question with no text selected](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-window-context.mp4) and [starting a thread from a saved highlight](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-saved-highlight.mp4).
 
