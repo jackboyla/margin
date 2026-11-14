@@ -4,9 +4,19 @@ A native macOS reading assistant beside your cursor. Keep your paper in Chrome o
 
 For macOS 26 or later. Answer with your signed-in [Codex CLI](https://github.com/openai/codex) or an OpenAI-compatible API. Your library saves locally in SQLite from the first launch.
 
+## Demos
+
+Recorded in Chrome on macOS 27.2 with the released beta and a real local Qwen3 model through the API backend. Click a preview to watch. Clips cut idle pauses; playback stays at normal speed.
+
+| Ask beside the paper | Keep separate threads |
+| --- | --- |
+| [![Watch: open an arXiv PDF, save a highlight and ask a question](docs/media/margin-paper-question.jpg)](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-paper-question.mp4) | [![Watch: save another passage, compare highlights and browse threads](docs/media/margin-multiple-threads.jpg)](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-multiple-threads.mp4) |
+
+Also watch [a question with no text selected](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-window-context.mp4) and [starting a thread from a saved highlight](https://github.com/jackboyla/margin/releases/download/v0.1.0-beta.1/margin-saved-highlight.mp4).
+
 ## Install
 
-1. Download the DMG from [GitHub Releases](https://github.com/jackboyla/margin/releases). If no version is listed yet, use the source build below.
+1. Download the DMG from [GitHub Releases](https://github.com/jackboyla/margin/releases).
 2. Open the DMG, drag **Margin** to **Applications**, then open it from Applications.
 3. In **Settings → Reading**, grant Device Control (Accessibility on macOS 26) and Screen Capture. macOS 27 calls the first permission **Device Control and Data Access**. Press **Control–Shift–H** to return to Margin after granting access. Allow Chrome or Safari Automation when macOS asks so Margin can associate notes with the page URL.
 4. In **Settings → Models**, choose Codex or an API provider and save your settings. Codex needs an existing `codex login`; API setup needs a model name and any required API key.
@@ -44,6 +54,7 @@ Builds use ad-hoc signing by default. Keep the app at a stable path when grantin
 
 ## Current limits
 
+- The PDF workflow is tested in Chrome. Safari PDF text selection is not yet verified on macOS 26 or later.
 - Restored highlights mark visible text lines using text recognition. They do not modify the webpage or PDF. A quote must match uniquely; missing or repeated text stays unpainted and remains in the sidebar. Math, columns, and scanned PDFs can defeat matching.
 - Chrome and Safari page identity uses their URL. Other apps depend on the document URL they expose or their window title; changed titles can create separate records.
 - Each arXiv paper version has its own identity. HTML, abstract, and PDF URLs for the same identifier share a library entry; unrelated query parameters and fragment routes remain significant.
