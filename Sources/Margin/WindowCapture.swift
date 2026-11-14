@@ -42,15 +42,20 @@ enum WindowCaptureError: LocalizedError {
         case .sourceChanged:
             return "The source window or page changed. Open Margin again from the page you want to use."
         case .browserURLUnavailable:
-            return "Margin could not read this page’s URL. Allow Accessibility and browser Automation access in System Settings, then try again."
+            return "Margin could not read this page’s URL. Allow \(WindowCapture.accessibilityPermissionName) and browser Automation access in System Settings, then try again."
         case .noReadableContent:
-            return "Margin could not read this window. Allow Accessibility or Screen Recording access in System Settings, then try again."
+            return "Margin could not read this window. Allow \(WindowCapture.accessibilityPermissionName) or Screen Recording access in System Settings, then try again."
         }
     }
 }
 
 @MainActor
 final class WindowCapture {
+    nonisolated static var accessibilityPermissionName: String {
+        if #available(macOS 27, *) { return "Device Control" }
+        return "Accessibility"
+    }
+
     private var lastTarget: WindowTarget?
     private let recognitionQueue = DispatchQueue(label: "com.jackboylan.margin.ocr", qos: .userInitiated)
 
@@ -95,7 +100,7 @@ final class WindowCapture {
         var lines: [OCRLine] = []
 
         if !accessibilityPermission {
-            warnings.append("Accessibility access is off; selected text is unavailable.")
+            warnings.append("\(Self.accessibilityPermissionName) access is off; selected text is unavailable.")
         }
         if screenCapturePermission {
             do {

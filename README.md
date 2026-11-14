@@ -8,7 +8,7 @@ For macOS 26 or later. Answer with your signed-in [Codex CLI](https://github.com
 
 1. Download the DMG from [GitHub Releases](https://github.com/jackboyla/margin/releases). If no version is listed yet, use the source build below.
 2. Open the DMG, drag **Margin** to **Applications**, then open it from Applications.
-3. In **Settings → Reading**, grant Accessibility and Screen Capture. Allow Chrome or Safari Automation when macOS asks so Margin can associate notes with the page URL.
+3. In **Settings → Reading**, grant Device Control (Accessibility on macOS 26) and Screen Capture. macOS 27 calls the first permission **Device Control and Data Access**. Press **Control–Shift–H** to return to Margin after granting access. Allow Chrome or Safari Automation when macOS asks so Margin can associate notes with the page URL.
 4. In **Settings → Models**, choose Codex or an API provider and save your settings. Codex needs an existing `codex login`; API setup needs a model name and any required API key.
 
 Ad-hoc beta builds are not notarized by Apple, and Gatekeeper may block them. If you trust the download, attempt to open it, then use **System Settings → Privacy & Security → Open Anyway** when macOS offers it. See [Apple's opening guidance](https://support.apple.com/en-us/102445) and check each release's signing notice.

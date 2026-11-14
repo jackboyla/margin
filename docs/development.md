@@ -17,7 +17,7 @@ bash scripts/test-vm.sh stop
 
 Set `TART_BIN` if Tart is outside `PATH`. The run command stays in the foreground; use a persistent terminal session for remote work. It disables host graphics, clipboard, audio and USB pass-through, and prints the guest VNC endpoint and password. Keep that output private. Connect to this guest endpoint through an SSH tunnel; leave host Screen Sharing off. Change the image's default guest password before adding credentials. Confirm `sysctl -n hw.model` reports `VirtualMac2,1` inside the guest before running input automation.
 
-Copy `dist/Margin.app` to a stable path such as `~/Applications/Margin.app` **inside the guest**. Configure a [model provider](providers.md) there, and grant Accessibility, Screen Recording and Safari/Chrome Automation inside the guest. Do not reuse a VM containing sign-in credentials as a public image. Stop the guest when tests finish to release its memory and CPU allocation.
+Copy `dist/Margin.app` to a stable path such as `~/Applications/Margin.app` **inside the guest**. Configure a [model provider](providers.md) there, and grant the window permissions requested in Margin's Reading settings, plus Safari/Chrome Automation, inside the guest. Do not reuse a VM containing sign-in credentials as a public image. Stop the guest when tests finish to release its memory and CPU allocation.
 
 ## Signing repeated builds
 

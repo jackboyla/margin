@@ -56,13 +56,15 @@ struct SettingsView: View {
                     Text("Margin reads the window you choose. Saved highlights stay in your library. Questions send captured text, and optional images, to your chosen model.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button {
+                        dismissPanels()
                         model.capture.requestAccessibilityPermission()
                         refresh.toggle()
                     } label: {
-                        Label(model.capture.accessibilityPermission ? "Accessibility enabled" : "Enable Accessibility",
+                        Label(model.capture.accessibilityPermission ? "\(WindowCapture.accessibilityPermissionName) enabled" : "Enable \(WindowCapture.accessibilityPermissionName)",
                               systemImage: model.capture.accessibilityPermission ? "checkmark.circle.fill" : "cursorarrow.click")
                     }
                     Button {
+                        dismissPanels()
                         model.capture.requestScreenCapturePermission()
                         refresh.toggle()
                     } label: {
@@ -70,13 +72,18 @@ struct SettingsView: View {
                               systemImage: model.capture.screenCapturePermission ? "checkmark.circle.fill" : "macwindow")
                     }
                     Button("Open Privacy Settings") {
+                        dismissPanels()
                         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security")!)
                     }.buttonStyle(.link)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
             }.id(refresh)
-            Text("Allow browser Automation when macOS asks. That connects your notes to the page's URL, so they return when you reopen it.")
+            Text("After granting access, press Control–Shift–H to return. Allow browser Automation when macOS asks so your notes return to the page's URL.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    private func dismissPanels() {
+        for window in NSApp.windows where window is FloatingPanel { window.orderOut(nil) }
     }
 
     private var modelSettings: some View {
