@@ -55,7 +55,7 @@ Builds use ad-hoc signing by default. Keep the app at a stable path when grantin
 ## Current limits
 
 - The PDF workflow is tested in Chrome. Safari PDF text selection is not yet verified on macOS 26 or later.
-- Restored highlights mark visible text lines using text recognition. They do not modify the webpage or PDF. A quote must match uniquely; missing or repeated text stays unpainted and remains in the sidebar. Math, columns, and scanned PDFs can defeat matching.
+- Restored highlights use native text positions in Chromium browsers, with text recognition as a fallback. They do not modify the webpage or PDF. A quote must match uniquely; missing or repeated text stays unpainted and remains in the sidebar. Math, columns, and scanned PDFs can defeat matching.
 - Chrome and Safari page identity uses their URL. Other apps depend on the document URL they expose or their window title; changed titles can create separate records.
 - Each arXiv paper version has its own identity. HTML, abstract, and PDF URLs for the same identifier share a library entry; unrelated query parameters and fragment routes remain significant.
 - Shortcuts are fixed.

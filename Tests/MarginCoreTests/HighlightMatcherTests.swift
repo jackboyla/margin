@@ -14,6 +14,12 @@ final class HighlightMatcherTests: XCTestCase {
         XCTAssertEqual(HighlightMatcher.matchedLineIndices(
             quote: "The efficient model's layers", lines: ["The efﬁcient model’s lay\u{00AD}ers"]
         ), [0])
+        XCTAssertEqual(HighlightMatcher.matchedLineIndices(
+            quote: "a quote", lines: ["Native text without the quote"], fallbackLines: ["Earlier text", "a quote"]
+        ), [2])
+        XCTAssertEqual(HighlightMatcher.matchedLineIndices(
+            quote: "a quote", lines: ["a quote"], fallbackLines: ["a quote"]
+        ), [0])
     }
 
     func testDuplicateOccurrencesAreAmbiguousIncludingOverlappingMatches() {
@@ -22,6 +28,9 @@ final class HighlightMatcherTests: XCTestCase {
         XCTAssertEqual(HighlightMatcher.matchedLineIndices(quote: "aa", lines: ["aaa"]), [])
         XCTAssertEqual(HighlightMatcher.matchedLineIndices(
             quote: "following", lines: ["following", "follow-", "ing"]
+        ), [])
+        XCTAssertEqual(HighlightMatcher.matchedLineIndices(
+            quote: "a quote", lines: ["a quote", "A QUOTE"], fallbackLines: ["a quote"]
         ), [])
     }
 

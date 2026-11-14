@@ -16,7 +16,7 @@ struct WindowTarget {
     let frame: CGRect
 }
 
-struct OCRLine {
+struct PositionedTextLine {
     let text: String
     /// Vision coordinates: normalized to the captured window, origin at bottom left.
     let bounds: CGRect
@@ -25,7 +25,8 @@ struct OCRLine {
 struct CapturedWindow {
     let context: SourceContext
     let target: WindowTarget
-    let ocrLines: [OCRLine]
+    let accessibleLines: [PositionedTextLine]
+    let ocrLines: [PositionedTextLine]
     let warnings: [String]
 }
 
@@ -106,7 +107,7 @@ final class WindowCapture {
         let source = try validatedSource(target, includeContent: true)
         var warnings: [String] = []
         var image: CGImage?
-        var lines: [OCRLine] = []
+        var lines: [PositionedTextLine] = []
 
         if !accessibilityPermission {
             warnings.append("\(Self.accessibilityPermissionName) access is off; selected text is unavailable.")
@@ -152,9 +153,9 @@ final class WindowCapture {
                             let observations: [VNRecognizedTextObservation]
                             do { observations = try recognize(.accurate) }
                             catch { observations = try recognize(.fast) }
-                            let result = observations.compactMap { observation -> OCRLine? in
+                            let result = observations.compactMap { observation -> PositionedTextLine? in
                                 guard let text = observation.topCandidates(1).first?.string else { return nil }
-                                return OCRLine(text: text, bounds: observation.boundingBox)
+                                return PositionedTextLine(text: text, bounds: observation.boundingBox)
                             }
                             continuation.resume(returning: result)
                         } catch { continuation.resume(throwing: error) }
@@ -167,6 +168,7 @@ final class WindowCapture {
 
         // Navigation during capture must not combine text from one page with another page’s image.
         let finalSource = try validatedSource(source.target)
+        guard finalSource.target.frame == source.target.frame else { throw WindowCaptureError.sourceChanged }
         // Browser PDF accessibility can include every page, even when only one is visible.
         let visibleText = lines.map(\.text).joined(separator: "\n")
         let text = visibleText.isEmpty ? source.accessibility.text : visibleText
@@ -194,7 +196,8 @@ final class WindowCapture {
             capturedAt: Date(), screenshotPath: screenshotPath
         )
         lastTarget = pinned
-        return CapturedWindow(context: context, target: pinned, ocrLines: lines, warnings: warnings)
+        return CapturedWindow(context: context, target: pinned, accessibleLines: source.accessibility.lines,
+                              ocrLines: lines, warnings: warnings)
     }
 
     private struct WindowRecord {
@@ -207,6 +210,7 @@ final class WindowCapture {
         var url: String?
         var text = ""
         var selection: String?
+        var lines: [PositionedTextLine] = []
     }
 
     private struct SourceSnapshot {
@@ -262,10 +266,12 @@ final class WindowCapture {
         }
         if let matchingWindow, includeContent || content.url == nil {
             let accessible = accessibleContent(window: matchingWindow, application: application,
+                                               frame: window.frame, captureLineBounds: isChromiumBrowser(bundleID),
                                                includeContent: includeContent)
             content.url = content.url ?? accessible.url
             content.text = accessible.text
             content.selection = accessible.selection
+            content.lines = accessible.lines
         }
         return SourceSnapshot(
             target: WindowTarget(pid: app.processIdentifier, windowID: window.id,
@@ -277,7 +283,7 @@ final class WindowCapture {
     }
 
     private func accessibleContent(window: AXUIElement, application: AXUIElement,
-                                   includeContent: Bool) -> AccessibleContent {
+                                   frame: CGRect, captureLineBounds: Bool, includeContent: Bool) -> AccessibleContent {
         var result = AccessibleContent()
         result.url = documentURL(window)
         if includeContent, let focused = element(application, kAXFocusedUIElementAttribute), belongsToWindow(focused, window: window) {
@@ -301,6 +307,10 @@ final class WindowCapture {
             if includeContent, [kAXStaticTextRole, kAXTextAreaRole].contains(role),
                let value = string(item, kAXValueAttribute), !value.isEmpty {
                 let fragment = String(value.prefix(60_000 - characters))
+                if captureLineBounds, role == kAXStaticTextRole, Date() < deadline {
+                    result.lines.append(contentsOf: positionedLines(item, text: fragment, windowFrame: frame,
+                                                                    deadline: deadline))
+                }
                 if fragments.last != fragment {
                     fragments.append(fragment)
                     characters += fragment.count
@@ -312,6 +322,40 @@ final class WindowCapture {
         }
         result.text = fragments.joined(separator: "\n")
         return result
+    }
+
+    private func positionedLines(_ element: AXUIElement, text: String, windowFrame: CGRect,
+                                 deadline: Date) -> [PositionedTextLine] {
+        guard let elementFrame = frame(element) else { return [] }
+        let clip = elementFrame.intersection(windowFrame)
+        guard !clip.isEmpty else { return [] }
+        let value = text as NSString
+        var lines: [PositionedTextLine] = []
+        value.enumerateSubstrings(in: NSRange(location: 0, length: value.length), options: .byLines) {
+            substring, range, _, stop in
+            guard Date() < deadline else { stop.pointee = true; return }
+            guard let substring, !substring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            var characterRange = CFRange(location: range.location, length: range.length)
+            guard let parameter = AXValueCreate(.cfRange, &characterRange) else { return }
+            var result: CFTypeRef?
+            guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
+                                                             parameter, &result) == .success,
+                  let result, CFGetTypeID(result) == AXValueGetTypeID() else {
+                stop.pointee = true
+                return
+            }
+            var bounds = CGRect.zero
+            guard AXValueGetValue(unsafeBitCast(result, to: AXValue.self), .cgRect, &bounds) else { return }
+            // Chromium range bounds are unclipped; its text element frame clips to the viewport.
+            // Keep whole line text only when the whole line is visible; OCR handles clipped text.
+            guard !bounds.isEmpty, !bounds.isInfinite, clip.contains(bounds) else { return }
+            lines.append(PositionedTextLine(text: substring, bounds: CGRect(
+                x: (bounds.minX - windowFrame.minX) / windowFrame.width,
+                y: (windowFrame.maxY - bounds.maxY) / windowFrame.height,
+                width: bounds.width / windowFrame.width, height: bounds.height / windowFrame.height
+            )))
+        }
+        return lines
     }
 
     private func selection(_ element: AXUIElement) -> String? {
@@ -352,14 +396,19 @@ final class WindowCapture {
     }
 
     private func matches(_ element: AXUIElement, frame: CGRect) -> Bool {
+        guard let bounds = self.frame(element) else { return false }
+        return abs(bounds.minX - frame.minX) < 3 && abs(bounds.minY - frame.minY) < 3 &&
+            abs(bounds.width - frame.width) < 3 && abs(bounds.height - frame.height) < 3
+    }
+
+    private func frame(_ element: AXUIElement) -> CGRect? {
         guard let position = attribute(element, kAXPositionAttribute), CFGetTypeID(position) == AXValueGetTypeID(),
-              let size = attribute(element, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return false }
+              let size = attribute(element, kAXSizeAttribute), CFGetTypeID(size) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero
         var dimensions = CGSize.zero
         guard AXValueGetValue(unsafeBitCast(position, to: AXValue.self), .cgPoint, &point),
-              AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions) else { return false }
-        return abs(point.x - frame.minX) < 3 && abs(point.y - frame.minY) < 3 &&
-            abs(dimensions.width - frame.width) < 3 && abs(dimensions.height - frame.height) < 3
+              AXValueGetValue(unsafeBitCast(size, to: AXValue.self), .cgSize, &dimensions) else { return nil }
+        return CGRect(origin: point, size: dimensions)
     }
 
     private func documentURL(_ element: AXUIElement) -> String? {

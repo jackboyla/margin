@@ -84,9 +84,13 @@ final class HighlightOverlays {
         }
         current = captured
         let saved = model.library.highlights.filter { $0.documentID == captured.context.documentID }
-        let lines = captured.ocrLines
-        let indices = Set(saved.flatMap { HighlightMatcher.matchedLineIndices(quote: $0.quote, lines: lines.map(\.text)) })
+        let accessibleText = captured.accessibleLines.map(\.text)
+        let recognizedText = captured.ocrLines.map(\.text)
+        let indices = Set(saved.flatMap {
+            HighlightMatcher.matchedLineIndices(quote: $0.quote, lines: accessibleText, fallbackLines: recognizedText)
+        })
         guard !indices.isEmpty else { window.orderOut(nil); return }
+        let lines = captured.accessibleLines + captured.ocrLines
         let frame = captured.target.frame
         // CoreGraphics uses a top-left desktop origin; AppKit uses a bottom-left origin.
         let desktopTop = NSScreen.screens.first?.frame.maxY ?? 0
