@@ -1,14 +1,49 @@
 name: Check
 on: [push, pull_request]
+permissions:
+  contents: read
 jobs:
   macos:
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
-      - run: swift test
+      - uses: actions/checkout@v7
+      - name: Start disposable PostgreSQL
+        env:
+          MARGIN_TEST_POSTGRES_PASSWORD: margin-ci-only
+        run: |
+          brew install postgresql@17
+          postgres_bin="$(brew --prefix postgresql@17)/bin"
+          echo "$postgres_bin" >> "$GITHUB_PATH"
+          printf '%s\n' "$MARGIN_TEST_POSTGRES_PASSWORD" > "$RUNNER_TEMP/margin-postgres-password"
+          "$postgres_bin/initdb" -D "$RUNNER_TEMP/margin-postgres" -U margin \
+            --auth-local=trust --auth-host=scram-sha-256 \
+            --pwfile="$RUNNER_TEMP/margin-postgres-password"
+          rm "$RUNNER_TEMP/margin-postgres-password"
+          "$postgres_bin/pg_ctl" -D "$RUNNER_TEMP/margin-postgres" \
+            -l "$RUNNER_TEMP/margin-postgres.log" \
+            -o "-h 127.0.0.1 -p 55432 -c ssl=off" -w start
+      - name: Test local and PostgreSQL libraries
+        env:
+          MARGIN_TEST_POSTGRES_HOST: 127.0.0.1
+          MARGIN_TEST_POSTGRES_PORT: "55432"
+          MARGIN_TEST_POSTGRES_DATABASE: postgres
+          MARGIN_TEST_POSTGRES_USERNAME: margin
+          MARGIN_TEST_POSTGRES_PASSWORD: margin-ci-only
+        run: swift test
+      - name: Stop disposable PostgreSQL
+        if: always()
+        run: |
+          if [[ -f "$RUNNER_TEMP/margin-postgres/postmaster.pid" ]]; then
+            pg_ctl -D "$RUNNER_TEMP/margin-postgres" -m fast -w stop
+          fi
+          rm -rf "$RUNNER_TEMP/margin-postgres"
+          rm -f "$RUNNER_TEMP/margin-postgres-password"
       - run: bash scripts/build-app.sh
-      - run: ditto -c -k --keepParent dist/Margin.app dist/Margin-macOS.zip
-      - uses: actions/upload-artifact@v4
+      - run: bash scripts/package-dmg.sh
+      - uses: actions/upload-artifact@v7
         with:
           name: Margin-macOS
-          path: dist/Margin-macOS.zip
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+          if-no-files-found: error

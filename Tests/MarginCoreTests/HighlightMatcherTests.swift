@@ -7,12 +7,22 @@ final class HighlightMatcherTests: XCTestCase {
             quote: "QUOTED\n  text continues here",
             lines: ["Earlier text", "The quoted text", "", " continues\there and ends.", "Later text"]
         ), [1, 3])
+        XCTAssertEqual(HighlightMatcher.matchedLineIndices(
+            quote: "In the following sections, we describe self-attention.",
+            lines: ["Earlier text", "In the follow-", "ing sections, we describe self-", "attention."]
+        ), [1, 2, 3])
+        XCTAssertEqual(HighlightMatcher.matchedLineIndices(
+            quote: "The efficient model's layers", lines: ["The efﬁcient model’s lay\u{00AD}ers"]
+        ), [0])
     }
 
     func testDuplicateOccurrencesAreAmbiguousIncludingOverlappingMatches() {
         XCTAssertEqual(HighlightMatcher.matchedLineIndices(quote: "a quote", lines: ["a quote", "A QUOTE"]), [])
         XCTAssertEqual(HighlightMatcher.matchedLineIndices(quote: "a quote", lines: ["a quote and a quote"]), [])
         XCTAssertEqual(HighlightMatcher.matchedLineIndices(quote: "aa", lines: ["aaa"]), [])
+        XCTAssertEqual(HighlightMatcher.matchedLineIndices(
+            quote: "following", lines: ["following", "follow-", "ing"]
+        ), [])
     }
 
     func testAbsentOrEmptyPhraseDoesNotMatch() {

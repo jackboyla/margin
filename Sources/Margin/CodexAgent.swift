@@ -17,7 +17,7 @@ public final class CodexAgent {
 
     public func run(
         prompt: String, imagePath: String?, sessionID: String?, workingDirectory: URL,
-        executable: URL, model: String?, onSession: @escaping (String) -> Void,
+        executable: URL, model: String?, onSession: @escaping (String) async -> Void,
         onActivity: @escaping (String) -> Void
     ) async throws -> String {
         guard active == nil else { throw CodexFailure("Codex is already running.") }
@@ -31,7 +31,7 @@ public final class CodexAgent {
         let updates = Task { @MainActor in
             for await event in execution.events {
                 switch event {
-                case .session(let id): onSession(id)
+                case .session(let id): await onSession(id)
                 case .activity(let message): onActivity(message)
                 }
             }

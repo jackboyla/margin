@@ -1,0 +1,76 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  macos:
+    runs-on: macos-15
+    env:
+      MARGIN_UNIVERSAL: '1'
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set release version
+        run: echo "MARGIN_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - run: swift test
+      - name: Import optional Developer ID certificate
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          SIGNING_IDENTITY: ${{ secrets.DEVELOPER_ID_IDENTITY }}
+        run: |
+          if [ -z "$CERTIFICATE_BASE64$CERTIFICATE_PASSWORD$SIGNING_IDENTITY" ]; then
+            echo 'Using ad-hoc signing; this release will not be notarized.'
+            exit 0
+          fi
+          : "${CERTIFICATE_BASE64:?Missing DEVELOPER_ID_CERTIFICATE_BASE64}"
+          : "${SIGNING_IDENTITY:?Missing DEVELOPER_ID_IDENTITY}"
+          KEYCHAIN_PATH="$RUNNER_TEMP/margin-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -hex 32)"
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 --decode > "$RUNNER_TEMP/margin-certificate.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$RUNNER_TEMP/margin-certificate.p12" -P "$CERTIFICATE_PASSWORD" -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH"
+          echo "CODE_SIGN_KEYCHAIN=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          echo "CODE_SIGN_IDENTITY=$SIGNING_IDENTITY" >> "$GITHUB_ENV"
+          echo 'MARGIN_DISTRIBUTION_SIGNING=1' >> "$GITHUB_ENV"
+      - run: bash scripts/build-app.sh
+      - name: Package and optionally notarize
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: bash scripts/package-dmg.sh
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTARY_CONFIGURED: ${{ secrets.NOTARY_APPLE_ID != '' }}
+        run: |
+          NOTES="$RUNNER_TEMP/release-notes.md"
+          printf '%s\n\n' 'Download the DMG, open it, and drag Margin to Applications. Requires macOS 14 or later; supports Apple silicon and Intel.' > "$NOTES"
+          if [ -n "${MARGIN_DISTRIBUTION_SIGNING:-}" ]; then
+            if [ "$NOTARY_CONFIGURED" = true ]; then
+              echo 'This release is signed with Developer ID and notarized by Apple.' >> "$NOTES"
+            else
+              echo 'This release is signed with Developer ID but is not notarized.' >> "$NOTES"
+            fi
+          else
+            echo 'This public beta is ad-hoc signed and is not notarized by Apple. macOS may block opening it. Only proceed if you trust this source; see the README for installation and permission setup.' >> "$NOTES"
+          fi
+          ARGS=(--verify-tag --title "Margin $MARGIN_VERSION" --notes-file "$NOTES")
+          if [[ "$MARGIN_VERSION" == *-* ]]; then
+            ARGS+=(--prerelease)
+          fi
+          gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.sha256 "${ARGS[@]}"
+      - name: Remove signing material
+        if: always()
+        run: |
+          if [ -f "$RUNNER_TEMP/margin-signing.keychain-db" ]; then
+            security delete-keychain "$RUNNER_TEMP/margin-signing.keychain-db"
+          fi
+          rm -f "$RUNNER_TEMP/margin-certificate.p12"

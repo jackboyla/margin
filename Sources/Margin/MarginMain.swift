@@ -117,6 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showSidebar(capture: Bool) {
         guard let model else { return }
+        model.sidebarShowsConversation = false
         if capture { model.beginCapture(newThread: true) }
         composer?.orderOut(nil)
         if sidebar == nil {

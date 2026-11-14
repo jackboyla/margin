@@ -96,10 +96,12 @@ public struct ThreadRecord: Codable, Sendable, Equatable, Identifiable {
     public var updatedAt: Date
     public var messages: [ChatMessage]
     public var providerSessionID: String?
+    public var agent: AgentConfiguration?
 
     public init(id: UUID = UUID(), documentID: String, title: String = "New thread",
                 createdAt: Date = Date(), updatedAt: Date = Date(),
-                messages: [ChatMessage] = [], providerSessionID: String? = nil) {
+                messages: [ChatMessage] = [], providerSessionID: String? = nil,
+                agent: AgentConfiguration? = nil) {
         self.id = id
         self.documentID = documentID
         self.title = title
@@ -107,6 +109,7 @@ public struct ThreadRecord: Codable, Sendable, Equatable, Identifiable {
         self.updatedAt = updatedAt
         self.messages = messages
         self.providerSessionID = providerSessionID
+        self.agent = agent
     }
 }
 

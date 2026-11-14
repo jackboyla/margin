@@ -19,7 +19,7 @@ final class LibraryStoreTests: XCTestCase {
                                    selection: "A useful quote")
         let highlight = Highlight(documentID: source.documentID, quote: "A useful quote", contextText: source.text)
         let store = try LibraryStore(directory: directory)
-        try store.update {
+        try await store.update {
             $0.documents.append(DocumentRecord(id: source.documentID, title: source.title,
                                                url: source.url, appName: source.appName))
             $0.highlights.append(highlight)
@@ -35,8 +35,8 @@ final class LibraryStoreTests: XCTestCase {
         let second = ThreadRecord(documentID: source.documentID, title: "Another question", messages: [
             ChatMessage(role: .user, body: "What are the limits?", context: source),
         ], providerSessionID: "session-two")
-        try reopened.update { $0.threads = [first, second] }
-        try reopened.update { $0.threads[0].messages[1].body = "Updated explanation" }
+        try await reopened.update { $0.threads = [first, second] }
+        try await reopened.update { $0.threads[0].messages[1].body = "Updated explanation" }
 
         let final = try LibraryStore(directory: directory)
         XCTAssertEqual(final.state, reopened.state)
@@ -55,7 +55,7 @@ final class LibraryStoreTests: XCTestCase {
             ChatMessage(role: .assistant, body: "Partial answer", status: .running),
             ChatMessage(role: .assistant, body: "Old failure", status: .failed),
         ]
-        try store.update { $0.threads.append(ThreadRecord(documentID: "paper", messages: messages)) }
+        try await store.update { $0.threads.append(ThreadRecord(documentID: "paper", messages: messages)) }
 
         let restarted = try LibraryStore(directory: directory)
         var expected = store.state
@@ -72,22 +72,28 @@ final class LibraryStoreTests: XCTestCase {
         enum TestError: Error { case rejected }
         let directory = try temporaryDirectory()
         let store = try LibraryStore(directory: directory)
-        try store.update { $0.highlights.append(Highlight(documentID: "paper", quote: "Keep this")) }
+        try await store.update { $0.highlights.append(Highlight(documentID: "paper", quote: "Keep this")) }
         let saved = store.state
         let file = directory.appendingPathComponent("library.json")
         let originalData = try Data(contentsOf: file)
 
-        XCTAssertThrowsError(try store.update {
-            $0.highlights.removeAll()
-            throw TestError.rejected
-        })
+        do {
+            try await store.update {
+                $0.highlights.removeAll()
+                throw TestError.rejected
+            }
+            XCTFail("A rejected mutation must not be saved")
+        } catch TestError.rejected {}
         XCTAssertEqual(store.state, saved)
         XCTAssertEqual(try Data(contentsOf: file), originalData)
 
         let backup = directory.appendingPathComponent("saved.json")
         try FileManager.default.moveItem(at: file, to: backup)
         try FileManager.default.createDirectory(at: file, withIntermediateDirectories: false)
-        XCTAssertThrowsError(try store.update { $0.highlights.removeAll() })
+        do {
+            try await store.update { $0.highlights.removeAll() }
+            XCTFail("Writing over a directory must fail")
+        } catch {}
         XCTAssertEqual(store.state, saved)
         XCTAssertEqual(try Data(contentsOf: backup), originalData)
         try FileManager.default.removeItem(at: file)
@@ -105,5 +111,31 @@ final class LibraryStoreTests: XCTestCase {
             XCTAssertThrowsError(try LibraryStore(directory: directory))
             XCTAssertEqual(try Data(contentsOf: file), contents)
         }
+    }
+
+    @MainActor
+    func testImportRequiresEmptyLibraryAndConfigurationContainsNoPassword() async throws {
+        let directory = try temporaryDirectory()
+        let store = try LibraryStore(directory: directory)
+        let imported = LibraryState(highlights: [Highlight(documentID: "paper", quote: "Imported")])
+        try await store.importIfEmpty(imported)
+        XCTAssertEqual(try LibraryStore(directory: directory).state, imported)
+        do {
+            try await store.importIfEmpty(LibraryState())
+            XCTFail("Import must not replace an existing library")
+        } catch LibraryStore.StoreError.libraryNotEmpty {}
+        XCTAssertEqual(store.state, imported)
+
+        let configuration = PostgresConfiguration(username: "reader")
+        XCTAssertEqual(configuration.tls, .verify)
+        let encoded = try JSONEncoder().encode(configuration)
+        let fields = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        XCTAssertEqual(Set(fields.keys), ["host", "port", "database", "username", "libraryID", "tls"])
+        var invalid = configuration
+        invalid.port = 70000
+        do {
+            _ = try await LibraryStore.openPostgres(configuration: invalid, password: "must-stay-private")
+            XCTFail("Invalid configuration must fail before connecting")
+        } catch LibraryStore.StoreError.invalidConfiguration {}
     }
 }

@@ -11,8 +11,9 @@ struct ComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "text.bubble.fill").foregroundStyle(.orange)
+                Image(systemName: "text.bubble.fill").foregroundStyle(.orange).font(.title3)
                 Text("Margin").font(.headline)
+                Text(model.activeAgent.label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                 Spacer()
                 Button(action: history) { Image(systemName: "sidebar.right") }.help("Recent threads · ⌃⇧H")
                 Button(action: close) { Image(systemName: "xmark") }.help("Close · Esc")
@@ -36,13 +37,14 @@ struct ComposerView: View {
 
 struct ConversationView: View {
     @ObservedObject var model: AppModel
+    var compact = true
     @FocusState private var focused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if let context = model.context {
                 HStack(alignment: .top) {
-                    Image(systemName: "macwindow").foregroundStyle(.secondary)
+                    Image(systemName: "doc.text").foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(context.title).font(.caption.weight(.medium)).lineLimit(2)
                         if let url = context.url {
@@ -51,7 +53,8 @@ struct ConversationView: View {
                     }
                     Spacer(minLength: 4)
                     Button { model.saveHighlight() } label: { Image(systemName: "highlighter") }
-                        .help("Save the current selection without asking a question").disabled(model.capturing)
+                        .help("Save the current selection without asking a question")
+                        .disabled(model.capturing || !model.libraryReady)
                     Button { model.beginCapture(newThread: false) } label: { Image(systemName: "arrow.clockwise") }
                         .help("Capture the source window again").disabled(model.capturing)
                 }.buttonStyle(.plain)
@@ -62,7 +65,7 @@ struct ConversationView: View {
                         Spacer(minLength: 0)
                     }
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(8).background(.yellow.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                    .padding(10).background(.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
                 }
             } else {
                 Text("Open a page or document, then press Control–Shift–Space to ask about it.")
@@ -77,11 +80,17 @@ struct ConversationView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(message.role == .user ? "You" : "Margin")
                                         .font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                                    if message.status == .running {
+                                    if message.status == .running, model.runningThreadID == thread.id {
+                                        if !model.liveAnswer.isEmpty {
+                                            Text(.init(model.liveAnswer)).font(.callout).textSelection(.enabled)
+                                        }
                                         HStack(spacing: 8) {
                                             ProgressView().controlSize(.small)
                                             Text(model.activity.isEmpty ? "Working…" : model.activity).font(.callout).lineLimit(3)
                                         }
+                                    } else if message.status == .running {
+                                        Text("Unfinished reply from another session. Send a follow-up to continue.")
+                                            .font(.callout).foregroundStyle(.secondary)
                                     } else {
                                         Text(.init(message.body.isEmpty ? "Response interrupted. Send a follow-up to continue." : message.body))
                                             .font(.callout).textSelection(.enabled)
@@ -93,7 +102,10 @@ struct ConversationView: View {
                             }
                         }.padding(.vertical, 4)
                     }
-                    .frame(maxHeight: 290)
+                    .frame(maxHeight: compact ? 290 : .infinity)
+                    .onAppear {
+                        if let id = thread.messages.last?.id { proxy.scrollTo(id, anchor: .top) }
+                    }
                     .onChange(of: thread.messages.count) { _, _ in
                         if let id = thread.messages.last?.id { proxy.scrollTo(id, anchor: .bottom) }
                     }
@@ -105,7 +117,8 @@ struct ConversationView: View {
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading this window…").font(.caption) }
             }
             if let error = model.error {
-                Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                ScrollView { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
+                    .frame(maxHeight: 64)
             } else if let notice = model.notice {
                 Text(notice).font(.caption).foregroundStyle(.secondary).lineLimit(3)
             }
@@ -127,8 +140,11 @@ struct ConversationView: View {
                     Button("Ask", systemImage: "arrow.up") { model.send() }
                         .keyboardShortcut(.return, modifiers: .command)
                         .buttonStyle(.borderedProminent).tint(.orange)
-                        .disabled(model.capturing || model.context == nil || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(model.capturing || !model.libraryReady || model.context == nil || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+            }
+            if model.storageBusy {
+                HStack { ProgressView().controlSize(.small); Text("Opening your library…").font(.caption) }
             }
         }.onAppear { focused = true }
     }
@@ -138,24 +154,35 @@ struct SidebarView: View {
     @ObservedObject var model: AppModel
     var close: () -> Void
     @State private var filter = 0
+    @State private var search = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Margin").font(.title2.weight(.semibold))
+                if model.sidebarShowsConversation, !model.showingSettings {
+                    Button { model.sidebarShowsConversation = false } label: { Image(systemName: "chevron.left") }
+                        .help("Back to your library")
+                } else {
+                    Image(systemName: "text.bubble.fill").foregroundStyle(.orange).font(.title2)
+                }
+                Text(model.showingSettings ? "Settings" : "Margin").font(.title2.weight(.semibold))
                 Spacer()
                 Button { model.showingSettings.toggle() } label: { Image(systemName: "gearshape") }
                 Button(action: close) { Image(systemName: "xmark") }
             }.buttonStyle(.plain)
             if model.showingSettings {
                 SettingsView(model: model)
-                Spacer()
+            } else if model.sidebarShowsConversation {
+                ConversationView(model: model, compact: false)
+                Spacer(minLength: 0)
             } else {
                 Picker("History", selection: $filter) {
                     Text("Recent").tag(0)
                     Text("This page").tag(1)
                     Text("Highlights").tag(2)
                 }.pickerStyle(.segmented)
+                TextField("Search your library", text: $search)
+                    .textFieldStyle(.roundedBorder)
                 if filter != 0 {
                     Text(model.pageContext?.title ?? "Capture a window with Control–Shift–Space first.")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
@@ -163,21 +190,21 @@ struct SidebarView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if filter == 2 {
-                            ForEach(model.currentHighlights) { highlight in
+                            ForEach(model.currentHighlights.filter { search.isEmpty || $0.quote.localizedCaseInsensitiveContains(search) }) { highlight in
                                 VStack(alignment: .leading, spacing: 7) {
                                     Text(highlight.quote).font(.callout).lineLimit(5).textSelection(.enabled)
                                     HStack {
-                                        Button("Ask about this") { model.useHighlight(highlight) }.disabled(model.capturing)
+                                        Button("Ask about this", systemImage: "text.bubble") { model.useHighlight(highlight) }.disabled(model.capturing)
                                         Spacer()
                                         Button(role: .destructive) { model.removeHighlight(highlight.id) } label: { Image(systemName: "trash") }
                                             .help("Delete highlight")
                                     }.buttonStyle(.plain).font(.caption)
-                                }.padding(10).background(.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+                                }.padding(13).background(.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
                             }
                             if model.currentHighlights.isEmpty { empty("No saved highlights for this page.") }
                         } else {
                             let threads = filter == 0 ? model.recentThreads : model.currentThreads
-                            ForEach(threads) { thread in
+                            ForEach(threads.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.messages.contains { $0.body.localizedCaseInsensitiveContains(search) } }) { thread in
                                 Button { model.openThread(thread) } label: {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(thread.title).font(.callout.weight(.medium)).lineLimit(2)
@@ -185,17 +212,26 @@ struct SidebarView: View {
                                             .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                                         Text(thread.updatedAt, style: .relative).font(.caption2).foregroundStyle(.tertiary)
                                     }
-                                    .frame(maxWidth: .infinity, alignment: .leading).padding(10)
+                                    .frame(maxWidth: .infinity, alignment: .leading).padding(13)
                                     .background(model.selectedThreadID == thread.id ? Color.orange.opacity(0.14) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
                                 }.buttonStyle(.plain).disabled(model.capturing)
                             }
                             if threads.isEmpty { empty("Your conversations will appear here.") }
                         }
                     }
-                }.frame(maxHeight: model.selectedThread == nil ? 260 : 190)
+                }
                 Divider()
-                ConversationView(model: model)
-                Spacer(minLength: 0)
+                HStack {
+                    Label(model.storageBackend == "local" ? "Saved on this Mac" : "PostgreSQL library", systemImage: "externaldrive")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("New thread", systemImage: "square.and.pencil") {
+                        model.newThread()
+                        model.sidebarShowsConversation = true
+                    }.disabled(model.capturing || !model.libraryReady)
+                }.buttonStyle(.plain)
+                if model.storageBusy { ProgressView("Opening your library…").font(.caption) }
+                if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).lineLimit(4) }
             }
         }
         .padding(18).frame(width: 420)
@@ -205,47 +241,11 @@ struct SidebarView: View {
     }
 
     private func empty(_ text: String) -> some View {
-        Text(text).font(.callout).foregroundStyle(.secondary).padding(.vertical, 20)
-    }
-}
-
-struct SettingsView: View {
-    @ObservedObject var model: AppModel
-    @State private var refresh = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Read where you are.").font(.headline)
-            Text("Control–Shift–Space opens a question beside your pointer.\nControl–Shift–H opens your threads and highlights.").font(.callout)
-            GroupBox("Window access") {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Margin reads the window you choose. Questions send its captured text and image to your configured Codex agent; saved highlights stay on this Mac.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    Button(model.capture.accessibilityPermission ? "Accessibility enabled" : "Enable Accessibility") {
-                        model.capture.requestAccessibilityPermission()
-                        refresh.toggle()
-                    }
-                    Button(model.capture.screenCapturePermission ? "Screen capture enabled" : "Enable Screen Capture") {
-                        model.capture.requestScreenCapturePermission()
-                        refresh.toggle()
-                    }
-                    Button("Open Privacy Settings") {
-                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security")!)
-                    }.buttonStyle(.link)
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
-            }.id(refresh)
-            GroupBox("Coding agent") {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Codex executable").font(.caption)
-                    TextField("Path to codex", text: $model.executablePath).textFieldStyle(.roundedBorder)
-                    Text("Working folder").font(.caption)
-                    TextField("Working folder", text: $model.workspacePath).textFieldStyle(.roundedBorder)
-                    Text("Uses your existing Codex sign-in. This prototype runs tools in read-only mode. Each conversation retains its own agent session.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }.padding(6)
-            }
-            Button("Open local library") { NSWorkspace.shared.open(model.directory) }
-            Button("Done") { model.showingSettings = false }.buttonStyle(.borderedProminent).tint(.orange)
-        }
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: "bookmark").font(.largeTitle).foregroundStyle(.orange.opacity(0.6))
+            Text(text).font(.callout).foregroundStyle(.secondary)
+            Text("Keep reading. Press ⌃⇧Space when something catches your attention.")
+                .font(.caption).foregroundStyle(.tertiary)
+        }.padding(.vertical, 28)
     }
 }
