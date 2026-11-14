@@ -17,7 +17,7 @@ if [ "${MARGIN_UNIVERSAL:-0}" = 1 ]; then
         BINARIES+=("$BIN_DIR/Margin")
     done
     lipo -create "${BINARIES[@]}" -output "$APP_DIR/Contents/MacOS/Margin"
-    lipo -verify_arch arm64 x86_64 "$APP_DIR/Contents/MacOS/Margin"
+    lipo "$APP_DIR/Contents/MacOS/Margin" -verify_arch arm64 x86_64
 else
     swift build -c release -Xlinker -rpath -Xlinker '@executable_path/../Frameworks' "$@"
     BIN_DIR="$(swift build -c release --show-bin-path "$@")"
@@ -58,7 +58,7 @@ fi
 read -ra ARCHITECTURES <<< "$(lipo -archs "$APP_DIR/Contents/MacOS/Margin")"
 for LIBRARY in "$FRAMEWORKS"/*.dylib; do
     [ -f "$LIBRARY" ] || continue
-    lipo -verify_arch "${ARCHITECTURES[@]}" "$LIBRARY"
+    lipo "$LIBRARY" -verify_arch "${ARCHITECTURES[@]}"
     codesign "${SIGNING_ARGS[@]}" "$LIBRARY"
     codesign --verify --strict "$LIBRARY"
 done
