@@ -73,8 +73,16 @@ final class HighlightOverlays {
     }
 
     private func show(_ captured: CapturedWindow) {
+        guard let model,
+              let active = try? model.capture.currentTarget(),
+              active.pid == captured.target.pid, active.windowID == captured.target.windowID,
+              active.frame == captured.target.frame,
+              active.url == captured.target.url, active.title == captured.target.title else {
+            current = nil
+            window.orderOut(nil)
+            return
+        }
         current = captured
-        guard let model else { return }
         let saved = model.library.highlights.filter { $0.documentID == captured.context.documentID }
         let lines = captured.ocrLines
         let indices = Set(saved.flatMap { HighlightMatcher.matchedLineIndices(quote: $0.quote, lines: lines.map(\.text)) })

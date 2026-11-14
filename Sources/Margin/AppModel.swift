@@ -86,12 +86,14 @@ final class AppModel: ObservableObject {
     }
 
     func newThread() {
+        guard !capturing else { return }
         selectedThreadID = nil
         draft = ""
         error = nil
     }
 
     func openThread(_ thread: ThreadRecord) {
+        guard !capturing else { return }
         selectedThreadID = thread.id
         draft = ""
         context = thread.messages.reversed().compactMap(\.context).first
@@ -101,6 +103,7 @@ final class AppModel: ObservableObject {
     }
 
     func useHighlight(_ highlight: Highlight) {
+        guard !capturing else { return }
         guard let doc = library.documents.first(where: { $0.id == highlight.documentID }) else { return }
         context = SourceContext(documentID: doc.id, appName: doc.appName, bundleID: "",
                                 title: doc.title, url: doc.url, text: highlight.contextText,
@@ -112,8 +115,8 @@ final class AppModel: ObservableObject {
 
     func saveHighlight() {
         guard !capturing else { return }
+        capturing = true
         Task {
-            capturing = true
             defer { capturing = false }
             do {
                 if let target {
@@ -149,8 +152,8 @@ final class AppModel: ObservableObject {
         guard runningThreadID == nil, !capturing else { return }
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
+        capturing = true
         Task {
-            capturing = true
             do {
                 if let target {
                     let result = try await capture.capture(target: target, attachmentDirectory: attachments)

@@ -112,6 +112,7 @@ struct ConversationView: View {
                 .onSubmit { model.send() }
             HStack {
                 Button("New thread") { model.newThread() }.buttonStyle(.plain).font(.caption)
+                    .disabled(model.capturing)
                 Spacer()
                 if model.runningThreadID != nil {
                     Button("Stop", role: .destructive) { model.cancel() }
@@ -159,7 +160,7 @@ struct SidebarView: View {
                                 VStack(alignment: .leading, spacing: 7) {
                                     Text(highlight.quote).font(.callout).lineLimit(5).textSelection(.enabled)
                                     HStack {
-                                        Button("Ask about this") { model.useHighlight(highlight) }
+                                        Button("Ask about this") { model.useHighlight(highlight) }.disabled(model.capturing)
                                         Spacer()
                                         Button(role: .destructive) { model.removeHighlight(highlight.id) } label: { Image(systemName: "trash") }
                                             .help("Delete highlight")
@@ -179,7 +180,7 @@ struct SidebarView: View {
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading).padding(10)
                                     .background(model.selectedThreadID == thread.id ? Color.orange.opacity(0.14) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
-                                }.buttonStyle(.plain)
+                                }.buttonStyle(.plain).disabled(model.capturing)
                             }
                             if threads.isEmpty { empty("Your conversations will appear here.") }
                         }
