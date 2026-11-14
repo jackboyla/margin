@@ -147,8 +147,9 @@ final class WindowCapture {
 
         // Navigation during capture must not combine text from one page with another page’s image.
         let finalSource = try validatedSource(source.target)
-        let text = source.accessibility.text.isEmpty
-            ? lines.map(\.text).joined(separator: "\n") : source.accessibility.text
+        // Browser PDF accessibility can include every page, even when only one is visible.
+        let visibleText = lines.map(\.text).joined(separator: "\n")
+        let text = visibleText.isEmpty ? source.accessibility.text : visibleText
         guard image != nil || !text.isEmpty || source.accessibility.selection != nil else {
             throw WindowCaptureError.noReadableContent
         }
