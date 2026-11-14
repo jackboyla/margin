@@ -6,10 +6,7 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var section = 0
     @State private var apiKey = ""
-    @State private var databasePassword = ""
-    @State private var storageChoice = "local"
     @State private var refresh = false
-    @State private var confirmRecovery = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -36,10 +33,7 @@ struct SettingsView: View {
                 .buttonStyle(.borderedProminent).tint(.orange)
         }
         .onAppear {
-            storageChoice = model.storageBackend
             loadAPIKey()
-            do { databasePassword = try Credentials.read(model.postgresCredentialAccount) }
-            catch { model.error = error.localizedDescription }
         }
     }
 
@@ -145,48 +139,11 @@ struct SettingsView: View {
     private var librarySettings: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("A home for your reading.").font(.headline)
-            Picker("Storage", selection: $storageChoice) {
-                Text("This Mac").tag("local")
-                Text("PostgreSQL").tag("postgres")
-            }.pickerStyle(.segmented)
-            if storageChoice == "postgres" {
-                Text("Connect a personal library on your own server. Connecting opens that library; it does not replace it with this Mac's notes.")
-                    .font(.caption).foregroundStyle(.secondary)
-                field("Host", text: $model.postgresConfiguration.host)
-                TextField("Port", value: $model.postgresConfiguration.port, format: .number.grouping(.never))
-                    .textFieldStyle(.roundedBorder)
-                field("Database", text: $model.postgresConfiguration.database)
-                field("Username", text: $model.postgresConfiguration.username)
-                SecureField("Database password", text: $databasePassword).textFieldStyle(.roundedBorder)
-                field("Library name", text: $model.postgresConfiguration.libraryID)
-                Toggle("Verify encrypted connection (TLS)", isOn: Binding(
-                    get: { model.postgresConfiguration.tls == .verify },
-                    set: { model.postgresConfiguration.tls = $0 ? .verify : .disabled }))
-                Text("Disable TLS only for a trusted local connection. The password stays in Keychain.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                Text("Your notes are available immediately and work offline. Back up the local library folder to keep a copy.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Open local library folder") { NSWorkspace.shared.open(model.directory) }
-            }
-            Button(storageChoice == "local" ? "Use this Mac" : "Connect to PostgreSQL") {
-                Task { await model.connectStorage(storageChoice, password: databasePassword) }
-            }.buttonStyle(.borderedProminent).tint(.orange).disabled(!model.canChangeStorage)
-            if model.storageBusy { ProgressView("Opening library…").font(.caption) }
-            if model.storageBackend == "postgres", !model.storageUnavailable {
-                Divider()
-                Button("Reload remote library") { Task { await model.reloadLibrary() } }
-                    .disabled(!model.canChangeStorage)
-                Button("Copy local notes into this empty library") { Task { await model.importLocalLibrary() } }
-                    .disabled(!model.canChangeStorage)
-                Text("Copying keeps the local original and refuses to overwrite a populated remote library. Images and Codex runtime sessions remain on the Mac that created them.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Button("Mark unfinished replies interrupted") { confirmRecovery = true }
-                    .disabled(!model.canChangeStorage)
-                    .confirmationDialog("Only continue if no other Margin client is still producing these replies.", isPresented: $confirmRecovery) {
-                        Button("Mark interrupted") { Task { await model.recoverUnfinishedReplies() } }
-                    }
-            }
+            Text("Your highlights and conversations save automatically on this Mac and stay available offline.")
+                .foregroundStyle(.secondary)
+            Button("Open library folder") { NSWorkspace.shared.open(model.directory) }
+            Text("To back up your reading history, quit Margin and copy the whole library folder. Keep the attachments with the database so your captured window images come with it.")
+                .font(.caption).foregroundStyle(.secondary)
         }
     }
 

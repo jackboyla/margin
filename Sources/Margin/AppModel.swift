@@ -18,11 +18,6 @@ final class AppModel: ObservableObject {
     @Published var sidebarShowsConversation = false
     @Published var liveAnswer = ""
     @Published var agentConfiguration: AgentConfiguration
-    @Published var postgresConfiguration: PostgresConfiguration
-    @Published private(set) var storageBackend: String
-    @Published private(set) var storageBusy = false
-    @Published private(set) var storageUnavailable = false
-    @Published private(set) var pendingWrites = 0
     @Published private(set) var unsavedAnswer: String?
     @Published var executablePath: String {
         didSet { UserDefaults.standard.set(executablePath, forKey: "agentExecutable") }
@@ -34,7 +29,7 @@ final class AppModel: ObservableObject {
     let directory: URL
     let attachments: URL
     let capture = WindowCapture()
-    private var store: LibraryStore
+    private let store: LibraryStore
     private let agent = CodexAgent()
     private var requestTask: Task<Void, Never>?
     private(set) var target: WindowTarget?
@@ -47,19 +42,12 @@ final class AppModel: ObservableObject {
         self.store = try LibraryStore(directory: directory)
         self.library = store.state
         self.agentConfiguration = Self.preference("agentConfiguration") ?? AgentConfiguration()
-        self.postgresConfiguration = Self.preference("postgresConfiguration") ?? PostgresConfiguration()
-        self.storageBackend = UserDefaults.standard.string(forKey: "storageBackend") ?? "local"
         self.executablePath = UserDefaults.standard.string(forKey: "agentExecutable")
             ?? CodexAgent.defaultExecutable()?.path ?? "/opt/homebrew/bin/codex"
         let workspace = directory.appendingPathComponent("AgentWorkspace", isDirectory: true)
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
         self.workspacePath = UserDefaults.standard.string(forKey: "agentWorkspace") ?? workspace.path
-        if storageBackend == "postgres" {
-            library = LibraryState()
-            storageUnavailable = true
-            Task { await connectStorage("postgres") }
-        }
     }
 
     var selectedThread: ThreadRecord? { library.threads.first { $0.id == selectedThreadID } }
@@ -68,8 +56,6 @@ final class AppModel: ObservableObject {
     }
     var recentThreads: [ThreadRecord] { library.threads.sorted { $0.updatedAt > $1.updatedAt } }
     var currentThreads: [ThreadRecord] { recentThreads.filter { $0.documentID == pageContext?.documentID } }
-    var libraryReady: Bool { !storageBusy && !storageUnavailable }
-    var canChangeStorage: Bool { !capturing && runningThreadID == nil && pendingWrites == 0 && !storageBusy }
     var activeAgent: AgentConfiguration { selectedThread?.agent ?? (selectedThread == nil ? agentConfiguration : AgentConfiguration()) }
 
     static func preference<T: Decodable>(_ key: String) -> T? {
@@ -79,13 +65,6 @@ final class AppModel: ObservableObject {
 
     func apiCredentialAccount(_ configuration: OpenAIConfiguration) throws -> String {
         "api:" + (try configuration.completionURL()).absoluteString
-    }
-
-    var postgresCredentialAccount: String { postgresCredentialAccount(postgresConfiguration) }
-
-    private func postgresCredentialAccount(_ config: PostgresConfiguration) -> String {
-        "postgres:" + [config.host, String(config.port), config.database, config.username]
-            .map { "\($0.utf8.count):\($0)" }.joined()
     }
 
     func saveAgentSettings(apiKey: String) throws {
@@ -98,74 +77,6 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(try JSONEncoder().encode(agentConfiguration), forKey: "agentConfiguration")
         notice = "Model settings saved. Existing conversations keep their model."
         error = nil
-    }
-
-    func connectStorage(_ backend: String, password: String? = nil) async {
-        guard canChangeStorage else { return }
-        storageBusy = true
-        error = nil
-        defer { storageBusy = false }
-        do {
-            let replacement: LibraryStore
-            if backend == "postgres" {
-                let configuration = postgresConfiguration
-                let account = postgresCredentialAccount(configuration)
-                let credential = try password ?? Credentials.read(account)
-                replacement = try await LibraryStore.openPostgres(configuration: configuration, password: credential)
-                try Credentials.save(credential, account: account)
-                UserDefaults.standard.set(try JSONEncoder().encode(configuration), forKey: "postgresConfiguration")
-                postgresConfiguration = configuration
-            } else {
-                replacement = try LibraryStore(directory: directory)
-            }
-            store = replacement
-            library = replacement.state
-            storageBackend = backend
-            storageUnavailable = false
-            UserDefaults.standard.set(backend, forKey: "storageBackend")
-            selectedThreadID = nil
-            sidebarShowsConversation = false
-            draft = ""
-            notice = backend == "postgres" ? "Connected to your PostgreSQL library." : "Using the library on this Mac."
-            onLibraryChange?()
-        } catch { self.error = error.localizedDescription }
-    }
-
-    func reloadLibrary() async {
-        guard canChangeStorage, !storageUnavailable else { return }
-        storageBusy = true
-        defer { storageBusy = false }
-        do {
-            try await store.reload()
-            library = store.state
-            error = nil
-            onLibraryChange?()
-        } catch { self.error = error.localizedDescription }
-    }
-
-    func importLocalLibrary() async {
-        guard canChangeStorage, storageBackend == "postgres", !storageUnavailable else { return }
-        storageBusy = true
-        defer { storageBusy = false }
-        do {
-            let local = try LibraryStore(directory: directory)
-            try await store.importIfEmpty(local.state)
-            library = store.state
-            notice = "Copied the local library. The original stays on this Mac."
-            error = nil
-            onLibraryChange?()
-        } catch { self.error = error.localizedDescription }
-    }
-
-    func recoverUnfinishedReplies() async {
-        guard canChangeStorage, libraryReady else { return }
-        storageBusy = true
-        defer { storageBusy = false }
-        do {
-            try await store.recoverInterruptedRuns()
-            library = store.state
-            error = nil
-        } catch { self.error = error.localizedDescription }
     }
 
     func document(for thread: ThreadRecord) -> DocumentRecord? {
@@ -232,7 +143,7 @@ final class AppModel: ObservableObject {
     }
 
     func saveHighlight() {
-        guard !capturing, libraryReady else { return }
+        guard !capturing else { return }
         capturing = true
         Task {
             defer { capturing = false }
@@ -260,7 +171,6 @@ final class AppModel: ObservableObject {
     }
 
     func removeHighlight(_ id: UUID) {
-        guard libraryReady else { return }
         Task {
             do {
                 try await update { $0.highlights.removeAll { $0.id == id } }
@@ -270,7 +180,7 @@ final class AppModel: ObservableObject {
     }
 
     func send() {
-        guard runningThreadID == nil, !capturing, libraryReady else { return }
+        guard runningThreadID == nil, !capturing else { return }
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
         capturing = true
@@ -372,20 +282,29 @@ final class AppModel: ObservableObject {
                     try await Task { @MainActor in
                         try await self.finishReply(threadID: thread.id, messageID: reply.id, body: body, status: status)
                     }.value
-                } catch { unsavedAnswer = body; self.error = "Could not save the answer: \(error.localizedDescription)" }
+                } catch {
+                    retainUnsavedAnswer(body, question: question, sourceTitle: source.title)
+                    self.error = "Could not save the answer: \(error.localizedDescription)"
+                }
                 return
             }
             do {
                 try await finishReply(threadID: thread.id, messageID: reply.id, body: answer, status: .complete)
-                unsavedAnswer = nil
             } catch {
-                unsavedAnswer = answer
+                retainUnsavedAnswer(answer, question: question, sourceTitle: source.title)
                 self.error = "The answer could not be saved. Copy it below before closing Margin: \(error.localizedDescription)"
             }
         }
     }
 
     func cancel() { activity = "Stopping…"; requestTask?.cancel(); agent.cancel() }
+
+    func discardUnsavedAnswers() { unsavedAnswer = nil }
+
+    private func retainUnsavedAnswer(_ answer: String, question: String, sourceTitle: String) {
+        let entry = "Source: \(sourceTitle)\nQuestion: \(question)\n\n\(answer)"
+        unsavedAnswer = unsavedAnswer.map { $0 + "\n\n---\n\n" + entry } ?? entry
+    }
 
     private func receiveDelta(_ delta: String) {
         liveAnswer += delta
@@ -403,8 +322,6 @@ final class AppModel: ObservableObject {
     }
 
     private func update(_ change: (inout LibraryState) throws -> Void) async throws {
-        pendingWrites += 1
-        defer { pendingWrites -= 1 }
         try await store.update(change)
         library = store.state
     }
@@ -418,7 +335,7 @@ final class AppModel: ObservableObject {
         guard let path = source.screenshotPath else { return nil }
         let file = URL(fileURLWithPath: path).resolvingSymlinksInPath()
         let root = attachments.resolvingSymlinksInPath().path + "/"
-        // A remote library may name a missing image; it must never authorize reading other files.
+        // Saved context must never authorize reading files outside the attachments folder.
         guard file.path.hasPrefix(root), FileManager.default.isReadableFile(atPath: file.path) else { return nil }
         return file.path
     }

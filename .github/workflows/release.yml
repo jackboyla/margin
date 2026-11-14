@@ -6,7 +6,7 @@ permissions:
   contents: write
 jobs:
   macos:
-    runs-on: macos-15
+    runs-on: macos-26
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       MARGIN_UNIVERSAL: '1'
@@ -14,6 +14,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Show build toolchain
         run: |
+          sw_vers
           xcodebuild -version
           swift --version
       - name: Set release version
@@ -57,7 +58,7 @@ jobs:
           NOTARY_CONFIGURED: ${{ secrets.NOTARY_APPLE_ID != '' }}
         run: |
           NOTES="$RUNNER_TEMP/release-notes.md"
-          printf '%s\n\n' 'Download the DMG, open it, and drag Margin to Applications. Requires macOS 14 or later; supports Apple silicon and Intel.' > "$NOTES"
+          printf '%s\n\n' 'Download the DMG, open it, and drag Margin to Applications. Requires macOS 26 or later; supports Apple silicon and Intel.' > "$NOTES"
           if [ -n "${MARGIN_DISTRIBUTION_SIGNING:-}" ]; then
             if [ "$NOTARY_CONFIGURED" = true ]; then
               echo 'This release is signed with Developer ID and notarized by Apple.' >> "$NOTES"

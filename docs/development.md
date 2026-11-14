@@ -1,10 +1,10 @@
 # Development and isolated testing
 
-Run `swift test` and `bash scripts/build-app.sh` on a Mac with Xcode and Swift 6.2 or later. The GitHub Actions check also runs the PostgreSQL integration test against a disposable database and packages a DMG. Keep interactive acceptance tests in a full macOS guest when the host Mac is in use: a Space or another Screen Sharing login is not a reliable boundary for display and input changes.
+Run `swift test` and `bash scripts/build-app.sh` on macOS 26 or later with Xcode 26.3 or later and Swift 6.2 or later. GitHub Actions runs the tests and packages a DMG on `macos-26` with Xcode 26.3 to cover the minimum supported system. For interactive acceptance, use a guest matching the macOS version being tested. A full guest isolates display and input changes while the host Mac is in use; a Space or another Screen Sharing login does not provide that isolation.
 
 ## Test guest
 
-Install [Tart](https://tart.run/quick-start/) on an Apple Silicon Mac. The helper uses a project-local, ignored VM store and disables automatic cache pruning. It creates a Sonoma 14.6.1 guest with two CPU cores, 4 GB RAM, and a fixed 1280 × 800 logical display. Allow at least 35 GiB free before creation; the guest continues to consume disk space after stopping.
+Install [Tart](https://tart.run/quick-start/) on an Apple Silicon Mac. The helper creates a macOS 27.2 guest with two CPU cores, 4 GB RAM, and a fixed 1280 × 800 logical display. It uses a project-local, ignored VM store and disables automatic cache pruning. Allow at least 40 GiB free before creation; the guest continues to consume disk space after stopping.
 
 ```sh
 bash scripts/test-vm.sh create
@@ -29,20 +29,6 @@ CODE_SIGN_IDENTITY="Your development signing identity" bash scripts/build-app.sh
 
 `CODE_SIGN_KEYCHAIN` optionally selects a dedicated keychain. Unlock it before building. The script defaults to ad-hoc signing when no identity is supplied. Keep signing keys, passwords, Codex credentials and VM disks out of Git. A local development signature does not provide notarization for distribution.
 
-## PostgreSQL integration
-
-The PostgreSQL test skips unless `MARGIN_TEST_POSTGRES_HOST` is set. Point it at a disposable database with TLS disabled; the test creates the shared table and removes its test library rows. For example, with a local test server already running:
-
-```sh
-MARGIN_TEST_POSTGRES_HOST=127.0.0.1 \
-MARGIN_TEST_POSTGRES_PORT=5432 \
-MARGIN_TEST_POSTGRES_DATABASE=postgres \
-MARGIN_TEST_POSTGRES_USERNAME=postgres \
-swift test --filter PostgresLibraryStoreTests
-```
-
-Set `MARGIN_TEST_POSTGRES_PASSWORD` through your shell's secret handling if required. See [storage setup](storage.md) for normal app connections, which verify TLS by default.
-
 ## Browser acceptance trial
 
 Use a public arXiv paper in the guest's existing browser. Exercise the actual app and agent, not a substituted response:
@@ -53,6 +39,6 @@ Use a public arXiv paper in the guest's existing browser. Exercise the actual ap
 4. Close and reopen the paper tab, then quit and reopen Margin. Check both the sidebar records and restored visible highlights. Saved records alone do not prove overlay restoration.
 5. Repeat selection and hotkey capture while highlight refreshes occur. Capture must finish, and changing conversations during capture must remain disabled. Check that long answers scroll while the composer header and question field remain visible.
 
-Exercise provider and storage settings in the app as well as the core tests: save and reload a Keychain credential, use a text-only model with images disabled, open the same PostgreSQL library from two clients, reload, and provoke a stale write. Verify that importing refuses a populated remote library. Test failure and interruption with the real service you intend to use; a mock server does not establish hosted-provider compatibility.
+Exercise provider settings in the app as well as the core tests: save and reload a Keychain credential and use a text-only model with images disabled. Test failure and interruption with the real service you intend to use; a mock server does not establish hosted-provider compatibility. Check [JSON migration and backups](storage.md) against a copy of a local library.
 
-The local library, database rows and Codex session files provide persistence evidence. Keep test output and screenshots outside the repository; distinguish real model answers from fixtures when reporting results.
+The SQLite library and Codex session files provide persistence evidence. Keep test output and screenshots outside the repository; distinguish real model answers from fixtures when reporting results.

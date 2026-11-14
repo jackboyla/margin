@@ -54,7 +54,7 @@ struct ConversationView: View {
                     Spacer(minLength: 4)
                     Button { model.saveHighlight() } label: { Image(systemName: "highlighter") }
                         .help("Save the current selection without asking a question")
-                        .disabled(model.capturing || !model.libraryReady)
+                        .disabled(model.capturing)
                     Button { model.beginCapture(newThread: false) } label: { Image(systemName: "arrow.clockwise") }
                         .help("Capture the source window again").disabled(model.capturing)
                 }.buttonStyle(.plain)
@@ -102,7 +102,7 @@ struct ConversationView: View {
                             }
                         }.padding(.vertical, 4)
                     }
-                    .frame(maxHeight: compact ? 290 : .infinity)
+                    .frame(maxHeight: compact ? (model.unsavedAnswer == nil ? 290 : 100) : .infinity)
                     .onAppear {
                         if let id = thread.messages.last?.id { proxy.scrollTo(id, anchor: .top) }
                     }
@@ -124,7 +124,18 @@ struct ConversationView: View {
             }
 
             if let answer = model.unsavedAnswer {
+                Text("Unsaved replies — copy before quitting").font(.caption.weight(.semibold))
                 ScrollView { Text(answer).font(.callout).textSelection(.enabled) }.frame(maxHeight: 160)
+                HStack {
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        if !NSPasteboard.general.setString(answer, forType: .string) {
+                            model.error = "Could not copy the unsaved replies. Select the text and copy it manually."
+                        }
+                    }
+                    Spacer()
+                    Button("Discard unsaved replies", role: .destructive) { model.discardUnsavedAnswers() }
+                }.font(.caption)
             }
             TextField("Ask about this window…", text: $model.draft, axis: .vertical)
                 .textFieldStyle(.plain).font(.body).lineLimit(2...5).focused($focused)
@@ -140,13 +151,10 @@ struct ConversationView: View {
                     Button("Ask", systemImage: "arrow.up") { model.send() }
                         .keyboardShortcut(.return, modifiers: .command)
                         .buttonStyle(.borderedProminent).tint(.orange)
-                        .disabled(model.capturing || !model.libraryReady || model.context == nil || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(model.capturing || model.context == nil || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-            if model.storageBusy {
-                HStack { ProgressView().controlSize(.small); Text("Opening your library…").font(.caption) }
-            }
-        }.onAppear { focused = true }
+        }.onAppear { DispatchQueue.main.async { focused = true } }
     }
 }
 
@@ -222,15 +230,14 @@ struct SidebarView: View {
                 }
                 Divider()
                 HStack {
-                    Label(model.storageBackend == "local" ? "Saved on this Mac" : "PostgreSQL library", systemImage: "externaldrive")
+                    Label("Saved on this Mac", systemImage: "externaldrive")
                         .font(.caption2).foregroundStyle(.secondary)
                     Spacer()
                     Button("New thread", systemImage: "square.and.pencil") {
                         model.newThread()
                         model.sidebarShowsConversation = true
-                    }.disabled(model.capturing || !model.libraryReady)
+                    }.disabled(model.capturing)
                 }.buttonStyle(.plain)
-                if model.storageBusy { ProgressView("Opening your library…").font(.caption) }
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).lineLimit(4) }
             }
         }

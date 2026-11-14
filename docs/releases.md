@@ -2,7 +2,7 @@
 
 ## Build a DMG
 
-On a Mac with Xcode and Swift 6.2 or later, build both architectures and package the app:
+On macOS 26 or later with Xcode 26.3 or later and Swift 6.2 or later, build both architectures and package the app:
 
 ```sh
 export MARGIN_VERSION=0.1.0
@@ -12,7 +12,7 @@ bash scripts/package-dmg.sh
 
 This produces `dist/Margin-0.1.0-macOS.dmg` and its `.sha256` file. The DMG contains `Margin.app` and an Applications link. Version values accept `x.y.z` and suffixes such as `0.1.0-beta.1`; the app's numeric bundle version uses `x.y.z`. Without `MARGIN_VERSION`, scripts use the version in `Resources/Info.plist`. Keep the same version when building and packaging.
 
-Local builds target the current architecture unless `MARGIN_UNIVERSAL=1` requests Apple silicon and Intel. The build includes Swift compatibility libraries needed on older macOS versions, signs those libraries, then signs the assembled app. Packaging verifies the app signature and disk image, and writes the checksum after any notarization and stapling.
+Local builds target the current architecture unless `MARGIN_UNIVERSAL=1` requests Apple silicon and Intel. Both require macOS 26 or later. Packaging verifies the app signature and disk image, and writes the checksum after any notarization and stapling.
 
 ## GitHub Releases
 

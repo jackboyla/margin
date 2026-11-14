@@ -2,7 +2,7 @@
 
 A native macOS reading assistant beside your cursor. Keep your paper in Chrome or Safari, ask about the current window, and return to your saved highlights and conversations later.
 
-For macOS 14 or later. Answer with your signed-in [Codex CLI](https://github.com/openai/codex) or an OpenAI-compatible API. Your library works locally from the first launch; PostgreSQL is optional.
+For macOS 26 or later. Answer with your signed-in [Codex CLI](https://github.com/openai/codex) or an OpenAI-compatible API. Your library saves locally in SQLite from the first launch.
 
 ## Install
 
@@ -28,11 +28,11 @@ The API presets cover OpenAI, Claude's OpenAI compatibility endpoint, Ollama, an
 
 ## Library
 
-By default, notes save immediately on this Mac. The optional PostgreSQL backend shares document records, captured text, highlights, and conversations through your own database. Images and Codex session files stay local. Remote updates require an explicit reload; conflicting writes refuse to overwrite another client's changes. Importing local notes requires an empty remote library. See [storage and backups](docs/storage.md).
+Notes save immediately in a local SQLite database. Document records, captured text, highlights, and conversations stay on this Mac, alongside window images. Codex keeps its own session files. Existing JSON libraries migrate automatically. See [storage, migration, and backups](docs/storage.md).
 
 ## Build
 
-Install Xcode with its macOS SDK and Swift 6.2 or later, then:
+On macOS 26 or later, install Xcode 26.3 or later with its macOS SDK and Swift 6.2 or later, then:
 
 ```sh
 swift test
