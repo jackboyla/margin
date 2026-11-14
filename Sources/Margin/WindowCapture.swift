@@ -94,6 +94,15 @@ final class WindowCapture {
 
     func capture(target: WindowTarget, attachmentDirectory: URL,
                  persistImage: Bool = true) async throws -> CapturedWindow {
+        if accessibilityPermission, isChromiumBrowser(target.bundleID) {
+            let application = AXUIElementCreateApplication(target.pid)
+            // Chromium enables its page accessibility tree after reading the application role.
+            _ = attribute(application, kAXRoleAttribute)
+            let deadline = Date().addingTimeInterval(0.5)
+            while element(application, kAXFocusedUIElementAttribute) == nil, Date() < deadline {
+                try await Task.sleep(for: .milliseconds(25))
+            }
+        }
         let source = try validatedSource(target, includeContent: true)
         var warnings: [String] = []
         var image: CGImage?
@@ -133,11 +142,17 @@ final class WindowCapture {
                 lines = try await withCheckedThrowingContinuation { continuation in
                     recognitionQueue.async {
                         do {
-                            let request = VNRecognizeTextRequest()
-                            request.recognitionLevel = .accurate
-                            request.usesLanguageCorrection = true
-                            try VNImageRequestHandler(cgImage: image).perform([request])
-                            let result = (request.results ?? []).compactMap { observation -> OCRLine? in
+                            func recognize(_ level: VNRequestTextRecognitionLevel) throws -> [VNRecognizedTextObservation] {
+                                let request = VNRecognizeTextRequest()
+                                request.recognitionLevel = level
+                                request.usesLanguageCorrection = true
+                                try VNImageRequestHandler(cgImage: image).perform([request])
+                                return request.results ?? []
+                            }
+                            let observations: [VNRecognizedTextObservation]
+                            do { observations = try recognize(.accurate) }
+                            catch { observations = try recognize(.fast) }
+                            let result = observations.compactMap { observation -> OCRLine? in
                                 guard let text = observation.topCandidates(1).first?.string else { return nil }
                                 return OCRLine(text: text, bounds: observation.boundingBox)
                             }
@@ -374,10 +389,15 @@ final class WindowCapture {
     }
 
     private func isBrowser(_ bundleID: String) -> Bool {
-        ["com.apple.Safari", "com.apple.SafariTechnologyPreview", "com.google.Chrome",
-         "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
-         "org.chromium.Chromium", "com.microsoft.edgemac", "com.brave.Browser",
-         "company.thebrowser.Browser", "org.mozilla.firefox"].contains(bundleID)
+        isChromiumBrowser(bundleID) ||
+            ["com.apple.Safari", "com.apple.SafariTechnologyPreview",
+             "company.thebrowser.Browser", "org.mozilla.firefox"].contains(bundleID)
+    }
+
+    private func isChromiumBrowser(_ bundleID: String) -> Bool {
+        ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev",
+         "com.google.Chrome.canary", "org.chromium.Chromium", "com.microsoft.edgemac",
+         "com.brave.Browser"].contains(bundleID)
     }
 
     private func browserURL(bundleID: String, pid: pid_t, window: WindowRecord) -> String? {
@@ -385,8 +405,7 @@ final class WindowCapture {
         switch bundleID {
         case "com.apple.Safari", "com.apple.SafariTechnologyPreview":
             property = "URL of current tab of front window"
-        case "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
-             "org.chromium.Chromium", "com.microsoft.edgemac", "com.brave.Browser":
+        case let id where isChromiumBrowser(id):
             property = "URL of active tab of front window"
         default:
             return nil
