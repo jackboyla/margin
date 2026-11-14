@@ -232,12 +232,6 @@ final class AppModel: ObservableObject {
 
     func cancel() { activity = "Stopping…"; agent.cancel() }
 
-    func openSource() {
-        if let raw = context?.url, let url = URL(string: raw), ["https", "http", "file"].contains(url.scheme) {
-            NSWorkspace.shared.open(url)
-        }
-    }
-
     private func finishReply(threadID: UUID, messageID: UUID, body: String, status: ChatMessage.Status) throws {
         try update { state in
             guard let t = state.threads.firstIndex(where: { $0.id == threadID }),

@@ -1,5 +1,4 @@
 import AppKit
-import Combine
 import SwiftUI
 
 @main
@@ -22,16 +21,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var composer: FloatingPanel?
     private var sidebar: FloatingPanel?
     private var overlays: HighlightOverlays?
-    private var layoutSubscription: AnyCancellable?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
             let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let model = try AppModel(directory: support.appendingPathComponent("Margin", isDirectory: true))
             self.model = model
-            layoutSubscription = model.objectWillChange.sink { [weak self] in
-                DispatchQueue.main.async { self?.fitComposer() }
-            }
             setupMenu()
             overlays = HighlightOverlays(model: model)
             shortcuts.onComposer = { [weak self] in self?.showComposer() }
@@ -88,13 +83,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if composer == nil {
             composer = FloatingPanel()
             let view = ComposerView(model: model, close: { [weak self] in self?.composer?.orderOut(nil) },
-                                    history: { [weak self] in self?.showSidebar(capture: false) })
+                                    history: { [weak self] in self?.showSidebar(capture: false) },
+                                    resize: { [weak self] in self?.fitComposer($0) })
             let host = FirstClickHostingView(rootView: view)
             host.sizingOptions = [.preferredContentSize]
             composer?.contentView = host
         }
         guard let composer else { return }
-        fitComposer()
         let point = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -104,9 +99,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composer.makeKeyAndOrderFront(nil)
     }
 
-    private func fitComposer() {
-        guard let composer, let content = composer.contentView else { return }
-        let size = content.fittingSize
+    private func fitComposer(_ size: CGSize) {
+        guard let composer else { return }
         guard size.height.isFinite, size.height > 0 else { return }
         let screen = composer.screen ?? NSScreen.main
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)

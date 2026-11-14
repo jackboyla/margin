@@ -6,6 +6,7 @@ struct ComposerView: View {
     @ObservedObject var model: AppModel
     var close: () -> Void
     var history: () -> Void
+    var resize: (CGSize) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -21,6 +22,12 @@ struct ComposerView: View {
         .padding(18)
         .frame(width: 420)
         .fixedSize(horizontal: false, vertical: true)
+        .background {
+            GeometryReader { geometry in
+                Color.clear.onAppear { resize(geometry.size) }
+                    .onChange(of: geometry.size) { _, size in resize(size) }
+            }
+        }
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
         .overlay(RoundedRectangle(cornerRadius: 18).stroke(.primary.opacity(0.10)))
         .onExitCommand(perform: close)

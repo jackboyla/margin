@@ -25,7 +25,7 @@ bash scripts/build-app.sh
 open dist/Margin.app
 ```
 
-The build creates an ad-hoc signed app, not a notarized distribution. Keep it at a stable path when granting permissions. The first launch explains Accessibility, Screen Recording, and browser Automation access, which let Margin read selections, capture the chosen window, and identify its webpage.
+The build creates an ad-hoc signed app, not a notarized distribution. Keep it at a stable path when granting permissions; ad-hoc rebuilds can require granting them again. The first launch explains Accessibility, Screen Recording, and browser Automation access, which let Margin read selections, capture the chosen window, and identify its webpage. See [development and isolated testing](docs/development.md) for stable signing and a separate macOS test desktop.
 
 Settings lets you choose the Codex executable and working folder. Sign in with `codex login` first. The prototype uses read-only agent tools; requests that require writing files are outside this version's scope.
 

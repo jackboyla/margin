@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import MarginCore
 import ScreenCaptureKit
 import Vision
@@ -51,6 +52,7 @@ enum WindowCaptureError: LocalizedError {
 @MainActor
 final class WindowCapture {
     private var lastTarget: WindowTarget?
+    private let recognitionQueue = DispatchQueue(label: "com.jackboylan.margin.ocr", qos: .userInitiated)
 
     var accessibilityPermission: Bool { AXIsProcessTrusted() }
     var screenCapturePermission: Bool { CGPreflightScreenCaptureAccess() }
@@ -83,11 +85,6 @@ final class WindowCapture {
         }
         lastTarget = source.target
         return source.target
-    }
-
-    func selectedText(target: WindowTarget) -> String? {
-        guard let source = try? validatedSource(target, includeContent: true) else { return nil }
-        return source.accessibility.selection
     }
 
     func capture(target: WindowTarget, attachmentDirectory: URL,
@@ -127,16 +124,22 @@ final class WindowCapture {
 
         if let image {
             do {
-                lines = try await Task.detached(priority: .userInitiated) {
-                    let request = VNRecognizeTextRequest()
-                    request.recognitionLevel = .accurate
-                    request.usesLanguageCorrection = true
-                    try VNImageRequestHandler(cgImage: image).perform([request])
-                    return (request.results ?? []).compactMap { observation -> OCRLine? in
-                        guard let text = observation.topCandidates(1).first?.string else { return nil }
-                        return OCRLine(text: text, bounds: observation.boundingBox)
+                // Vision blocks internally; keep it off Swift's cooperative thread pool.
+                lines = try await withCheckedThrowingContinuation { continuation in
+                    recognitionQueue.async {
+                        do {
+                            let request = VNRecognizeTextRequest()
+                            request.recognitionLevel = .accurate
+                            request.usesLanguageCorrection = true
+                            try VNImageRequestHandler(cgImage: image).perform([request])
+                            let result = (request.results ?? []).compactMap { observation -> OCRLine? in
+                                guard let text = observation.topCandidates(1).first?.string else { return nil }
+                                return OCRLine(text: text, bounds: observation.boundingBox)
+                            }
+                            continuation.resume(returning: result)
+                        } catch { continuation.resume(throwing: error) }
                     }
-                }.value
+                }
             } catch {
                 warnings.append("Text recognition was unavailable: \(error.localizedDescription)")
             }
@@ -295,9 +298,14 @@ final class WindowCapture {
         if let text = string(element, kAXSelectedTextAttribute), !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return String(text.prefix(60_000))
         }
-        if let range = attribute(element, kAXSelectedTextRangeAttribute) {
+        // WebKit exposes document selections as text markers rather than character ranges.
+        for (rangeAttribute, stringAttribute) in [
+            (kAXSelectedTextRangeAttribute, kAXStringForRangeParameterizedAttribute),
+            ("AXSelectedTextMarkerRange", "AXStringForTextMarkerRange")
+        ] {
+            guard let range = attribute(element, rangeAttribute) else { continue }
             var value: CFTypeRef?
-            if AXUIElementCopyParameterizedAttributeValue(element, kAXStringForRangeParameterizedAttribute as CFString,
+            if AXUIElementCopyParameterizedAttributeValue(element, stringAttribute as CFString,
                                                          range, &value) == .success,
                let text = value as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return String(text.prefix(60_000))
@@ -381,6 +389,11 @@ final class WindowCapture {
         let instances = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
         guard instances.count == 1, instances[0].processIdentifier == pid,
               frontWindow(pid: pid)?.id == window.id else { return nil }
+        // Permission dialogs must not expire with the short browser-read timeout.
+        let address = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        guard AEDeterminePermissionToAutomateTarget(address.aeDesc, typeWildCard, typeWildCard, true) == noErr else {
+            return nil
+        }
         let source = "with timeout of 2 seconds\n tell application id \"\(bundleID)\" to return {\(property), bounds of front window}\nend timeout"
         var error: NSDictionary?
         let response = NSAppleScript(source: source)?.executeAndReturnError(&error)
