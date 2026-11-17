@@ -27,6 +27,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let model = try AppModel(directory: support.appendingPathComponent("Margin", isDirectory: true))
             self.model = model
+            prepareComposer()
             setupMenu()
             overlays = HighlightOverlays(model: model)
             shortcuts.onComposer = { [weak self] in self?.showComposer() }
@@ -76,19 +77,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func settings() { model?.showingSettings = true; showSidebar(capture: false) }
     @objc private func quit() { NSApp.terminate(nil) }
 
+    private func prepareComposer() {
+        guard composer == nil, let model else { return }
+        composer = FloatingPanel()
+        let view = ComposerView(model: model, close: { [weak self] in self?.composer?.orderOut(nil) },
+                                history: { [weak self] in self?.showSidebar(capture: false) },
+                                resize: { [weak self] in self?.fitComposer($0) })
+        let host = FirstClickHostingView(rootView: view)
+        host.sizingOptions = [.preferredContentSize]
+        composer?.contentView = host
+        // Construct the text field while launching, before the first shortcut needs it.
+        host.layoutSubtreeIfNeeded()
+    }
+
     private func showComposer() {
         guard let model else { return }
         model.beginCapture(newThread: model.selectedThreadID == nil)
         sidebar?.orderOut(nil)
-        if composer == nil {
-            composer = FloatingPanel()
-            let view = ComposerView(model: model, close: { [weak self] in self?.composer?.orderOut(nil) },
-                                    history: { [weak self] in self?.showSidebar(capture: false) },
-                                    resize: { [weak self] in self?.fitComposer($0) })
-            let host = FirstClickHostingView(rootView: view)
-            host.sizingOptions = [.preferredContentSize]
-            composer?.contentView = host
-        }
+        prepareComposer()
         guard let composer else { return }
         let point = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main
