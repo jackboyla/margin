@@ -1,6 +1,6 @@
 # Development and isolated testing
 
-Run `swift test` and `bash scripts/build-app.sh` on macOS 26 or later with Xcode 26.3 or later and Swift 6.2 or later. GitHub Actions runs the tests and packages a DMG on `macos-26` with Xcode 26.3 to cover the minimum supported system. For interactive acceptance, use a guest matching the macOS version being tested. A full guest isolates display and input changes while the host Mac is in use; a Space or another Screen Sharing login does not provide that isolation.
+Run `swift test` and `bash scripts/build-app.sh` on macOS 26 or later with Xcode 26.3 or later and Swift 6.2 or later. GitHub Actions runs the tests and packages a DMG on `macos-26-intel` with Xcode 26.3 to cover the minimum supported system. For interactive acceptance, use a guest matching the macOS version being tested. A full guest isolates display and input changes while the host Mac is in use; a Space or another Screen Sharing login does not provide that isolation.
 
 ## Test guest
 

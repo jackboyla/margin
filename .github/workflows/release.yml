@@ -6,7 +6,7 @@ permissions:
   contents: write
 jobs:
   macos:
-    runs-on: macos-26
+    runs-on: macos-26-intel
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
       MARGIN_UNIVERSAL: '1'
