@@ -75,8 +75,7 @@ final class HighlightOverlays {
         guard let model,
               let active = try? model.capture.currentTarget(),
               active.pid == captured.target.pid, active.windowID == captured.target.windowID,
-              active.frame == captured.target.frame,
-              active.title.isEmpty || active.title == captured.target.title else {
+              active.frame == captured.target.frame else {
             window.orderOut(nil)
             return
         }

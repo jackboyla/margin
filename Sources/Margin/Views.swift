@@ -13,7 +13,6 @@ struct ComposerView: View {
             HStack {
                 Image(systemName: "text.bubble.fill").foregroundStyle(.orange).font(.title3)
                 Text("Margin").font(.headline)
-
                 Spacer()
                 Button(action: history) { Image(systemName: "sidebar.right") }.help("Recent threads · ⌃⇧H")
                 Button(action: close) { Image(systemName: "xmark") }.help("Close · Esc")
@@ -193,11 +192,11 @@ struct ModelChoiceView: View {
                     Text("OpenAI-compatible API").tag(AgentConfiguration.Backend.openAI)
                 }.disabled(model.selectedThread != nil)
                 if model.composerConfiguration.backend == .codex {
-                    TextField("Codex default", text: Binding(
+                    TextField("Automatic", text: Binding(
                         get: { model.composerConfiguration.codexModel ?? "" },
                         set: { model.composerConfiguration.codexModel = $0.isEmpty ? nil : $0 }))
                         .textFieldStyle(.roundedBorder).accessibilityLabel("Codex model")
-                    Text("Leave empty to use your Codex default.").font(.caption).foregroundStyle(.secondary)
+                    Text("Leave empty to let Codex choose. Enter a model to override it.").font(.caption).foregroundStyle(.secondary)
                 } else {
                     TextField("Model name", text: $model.composerConfiguration.api.model)
                         .textFieldStyle(.roundedBorder).accessibilityLabel("API model")

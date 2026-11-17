@@ -96,7 +96,7 @@ struct SettingsView: View {
             if model.agentConfiguration.backend == .codex {
                 Text("Uses your existing Codex sign-in and read-only tools. Each thread keeps its own agent session.")
                     .font(.caption).foregroundStyle(.secondary)
-                TextField("Codex model (empty uses Codex default)", text: Binding(
+                TextField("Codex model (empty lets Codex choose)", text: Binding(
                     get: { model.agentConfiguration.codexModel ?? "" },
                     set: { model.agentConfiguration.codexModel = $0.isEmpty ? nil : $0 }))
                     .textFieldStyle(.roundedBorder)

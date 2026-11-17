@@ -309,6 +309,13 @@ final class WindowCapture {
         if accessibilityPermission, isChromiumBrowser(app.bundleIdentifier ?? "") {
             // Reading the role asks Chromium to enable its page accessibility tree.
             _ = attribute(application, kAXRoleAttribute)
+            if includeContent {
+                // A cold Chromium process exposes focused content asynchronously after the role read.
+                let deadline = Date().addingTimeInterval(0.5)
+                while element(application, kAXFocusedUIElementAttribute) == nil, Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.025)
+                }
+            }
         }
         let focusedWindow = accessibilityPermission ? element(application, kAXFocusedWindowAttribute) : nil
         let matchingWindow = focusedWindow.flatMap { matches($0, frame: window.frame) ? $0 : nil }

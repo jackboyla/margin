@@ -19,5 +19,5 @@ public struct AgentConfiguration: Codable, Equatable, Sendable {
         self.codexModel = codexModel
     }
 
-    public var label: String { backend == .codex ? (codexModel.flatMap { $0.isEmpty ? nil : $0 } ?? "Codex default") : api.model }
+    public var label: String { backend == .codex ? (codexModel.flatMap { $0.isEmpty ? nil : $0 } ?? "Codex automatic") : api.model }
 }

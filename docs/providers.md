@@ -6,7 +6,7 @@ Click the model below the question field to change it for this conversation, inc
 
 ## Codex
 
-Install and sign in to [Codex CLI](https://github.com/openai/codex), then select its executable and a working folder. Margin starts Codex with read-only tools and keeps a separate agent session for each thread. You can set a Codex model or leave it empty to use the CLI default. Available window images accompany captured text. Codex manages its own sign-in and session files.
+Install and sign in to [Codex CLI](https://github.com/openai/codex), then select its executable and a working folder. Margin starts Codex with read-only tools and keeps a separate agent session for each thread. Enter a model name to override Codex’s choice; leave it empty to let Codex manage the model. Available window images accompany captured text. Codex manages its own sign-in and session files.
 
 ## OpenAI-compatible APIs
 
