@@ -18,10 +18,12 @@ struct WindowTarget: Sendable {
     var identityResolved = false
 }
 
-struct PositionedTextLine: Sendable {
+// Vision candidates are immutable; their range queries run on recognitionQueue.
+struct PositionedTextLine: @unchecked Sendable {
     let text: String
     /// Vision coordinates: normalized to the captured window, origin at bottom left.
     let bounds: CGRect
+    var recognizedText: VNRecognizedText? = nil
 }
 
 struct CapturedWindow: Sendable {
@@ -31,6 +33,26 @@ struct CapturedWindow: Sendable {
     let ocrLines: [PositionedTextLine]
     let warnings: [String]
     var image: CGImage? = nil
+    var textAnchors: [AccessibleTextAnchor] = []
+}
+
+struct AccessibleTextAnchor: @unchecked Sendable {
+    let element: AXUIElement
+    let text: String
+}
+
+struct TrackedHighlights: @unchecked Sendable {
+    let target: WindowTarget
+    let anchors: [AccessibleTextAnchor]
+    let matches: [HighlightMatcher.TextMatch]
+    let recognizedRectangles: [CGRect]
+    let hasUnmatchedQuotes: Bool
+}
+
+struct HighlightFrame: Sendable {
+    let target: WindowTarget
+    /// Screen coordinates, with the origin at the top left.
+    let rectangles: [CGRect]
 }
 
 enum WindowCaptureError: LocalizedError {
@@ -218,8 +240,8 @@ final class WindowCapture {
                     do { observations = try recognize(.accurate) }
                     catch { observations = try recognize(.fast) }
                     return observations.compactMap { observation -> PositionedTextLine? in
-                        guard let text = observation.topCandidates(1).first?.string else { return nil }
-                        return PositionedTextLine(text: text, bounds: observation.boundingBox)
+                        guard let recognized = observation.topCandidates(1).first else { return nil }
+                        return PositionedTextLine(text: recognized.string, bounds: observation.boundingBox, recognizedText: recognized)
                     }
                 }
             } catch {
@@ -254,13 +276,95 @@ final class WindowCapture {
         )
         lastTarget = pinned
         return CapturedWindow(context: context, target: pinned, accessibleLines: source.accessibility.lines,
-                              ocrLines: lines, warnings: warnings, image: image)
+                              ocrLines: lines, warnings: warnings, image: image, textAnchors: source.accessibility.anchors)
     }
 
     func refresh(_ captured: CapturedWindow, attachmentDirectory: URL,
                  persistImage: Bool = false) async throws -> CapturedWindow {
         try await capture(target: captured.target, attachmentDirectory: attachmentDirectory,
                           persistImage: persistImage, reusing: captured)
+    }
+
+    func trackHighlights(in captured: CapturedWindow, quotes: [String]) async throws -> TrackedHighlights {
+        try await queued {
+            let native = captured.textAnchors.map(\.text)
+            let recognized = captured.ocrLines.map(\.text)
+            let byQuote = quotes.map { quote in
+                let found = HighlightMatcher.matchedRanges(quote: quote, lines: native, fallbackLines: recognized)
+                if found.contains(where: { $0.line < native.count && self.bounds(captured.textAnchors[$0.line].element, range: $0.range) == nil }) {
+                    return HighlightMatcher.matchedRanges(quote: quote, lines: [], fallbackLines: recognized).map {
+                        HighlightMatcher.TextMatch(line: native.count + $0.line, range: $0.range)
+                    }
+                }
+                return found
+            }
+            let matches = byQuote.flatMap { $0 }
+            let rectangles = matches.compactMap { match -> CGRect? in
+                guard match.line >= native.count else { return nil }
+                let line = captured.ocrLines[match.line - native.count]
+                guard let candidate = line.recognizedText,
+                      let range = Range(match.range, in: candidate.string) else { return nil }
+                // Accurate Vision supplies word boxes, so partial-word matches must stay unpainted.
+                var partialWord = false
+                candidate.string.enumerateSubstrings(in: candidate.string.startIndex..<candidate.string.endIndex, options: .byWords) { _, word, _, _ in
+                    let span = NSRange(word, in: candidate.string)
+                    let overlap = NSIntersectionRange(span, match.range).length
+                    if overlap > 0, overlap < span.length { partialWord = true }
+                }
+                guard !partialWord, let observation = try? candidate.boundingBox(for: range) else { return nil }
+                return observation.boundingBox
+            }
+            return TrackedHighlights(target: captured.target, anchors: captured.textAnchors,
+                                     matches: matches.filter { $0.line < native.count },
+                                     recognizedRectangles: rectangles, hasUnmatchedQuotes: byQuote.contains(where: \.isEmpty))
+        }
+    }
+
+    func highlightFrame(_ tracked: TrackedHighlights, includeRecognized: Bool) async throws -> HighlightFrame {
+        try await queued {
+            let source = try self.validatedSource(tracked.target)
+            let frame = source.target.frame
+            var rectangles: [CGRect] = []
+            for index in Set(tracked.matches.map(\.line)).sorted() {
+                let anchor = tracked.anchors[index]
+                guard let value = self.string(anchor.element, kAXValueAttribute),
+                      value.utf16.starts(with: anchor.text.utf16),
+                      let elementFrame = self.frame(anchor.element) else { throw WindowCaptureError.sourceChanged }
+                let clip = frame.intersection(elementFrame)
+                if clip.isEmpty { continue }
+                for match in tracked.matches where match.line == index {
+                    guard let bounds = TextRangeGeometry.rectangles(text: anchor.text, range: match.range, bounds: {
+                        self.bounds(anchor.element, range: $0)
+                    }) else { continue }
+                    rectangles.append(contentsOf: bounds.compactMap { rect in
+                        let visible = rect.intersection(clip)
+                        return visible.isEmpty ? nil : visible
+                    })
+                }
+            }
+            if includeRecognized, frame == tracked.target.frame {
+                rectangles.append(contentsOf: tracked.recognizedRectangles.map { rect in
+                    CGRect(x: frame.minX + rect.minX * frame.width, y: frame.maxY - rect.maxY * frame.height,
+                           width: rect.width * frame.width, height: rect.height * frame.height)
+                })
+            }
+            let final = try self.validatedSource(source.target)
+            guard final.target.frame == frame else { throw WindowCaptureError.sourceChanged }
+            return HighlightFrame(target: final.target, rectangles: rectangles)
+        }
+    }
+
+    private nonisolated func bounds(_ element: AXUIElement, range: NSRange) -> CGRect? {
+        var span = CFRange(location: range.location, length: range.length)
+        guard let parameter = AXValueCreate(.cfRange, &span) else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(element, kAXBoundsForRangeParameterizedAttribute as CFString,
+                                                         parameter, &value) == .success,
+              let value, CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
+        var rect = CGRect.zero
+        guard AXValueGetValue(unsafeBitCast(value, to: AXValue.self), .cgRect, &rect),
+              !rect.isNull, !rect.isInfinite else { return nil }
+        return rect
     }
 
     private nonisolated func persist(_ image: CGImage?, in directory: URL) throws -> String? {
@@ -286,6 +390,7 @@ final class WindowCapture {
         var text = ""
         var selection: String?
         var lines: [PositionedTextLine] = []
+        var anchors: [AccessibleTextAnchor] = []
         var hasVisibleCoverage = true
         var unpositionedText: [String] = []
         var visibleText: String { (lines.map(\.text) + unpositionedText).joined(separator: "\n") }
@@ -380,6 +485,7 @@ final class WindowCapture {
             content.text = accessible.text
             content.selection = accessible.selection
             content.lines = accessible.lines
+            content.anchors = accessible.anchors
             content.hasVisibleCoverage = accessible.hasVisibleCoverage
             content.unpositionedText = accessible.unpositionedText
         }
@@ -427,6 +533,7 @@ final class WindowCapture {
             if includeContent, [kAXStaticTextRole, kAXTextAreaRole].contains(role),
                let value = string(item, kAXValueAttribute), !value.isEmpty {
                 let fragment = String(value.prefix(60_000 - characters))
+                result.anchors.append(AccessibleTextAnchor(element: item, text: fragment))
                 if captureLineBounds, Date() < deadline {
                     let positioned = positionedLines(item, text: fragment, windowFrame: frame, deadline: deadline)
                     result.lines.append(contentsOf: positioned.lines)

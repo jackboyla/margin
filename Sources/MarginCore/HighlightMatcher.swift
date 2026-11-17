@@ -1,20 +1,35 @@
 import Foundation
 
 public enum HighlightMatcher {
-    /// Returns indices into `lines + fallbackLines`; ambiguity in `lines` prevents fallback.
+    public struct TextMatch: Equatable, Sendable {
+        public let line: Int
+        /// UTF-16 range in the original line.
+        public let range: NSRange
+
+        public init(line: Int, range: NSRange) {
+            self.line = line
+            self.range = range
+        }
+    }
+
     public static func matchedLineIndices(quote: String, lines: [String], fallbackLines: [String] = []) -> [Int] {
+        matchedRanges(quote: quote, lines: lines, fallbackLines: fallbackLines).map(\.line)
+    }
+
+    /// Lines index into `lines + fallbackLines`. An ambiguous native match prevents fallback.
+    public static func matchedRanges(quote: String, lines: [String], fallbackLines: [String] = []) -> [TextMatch] {
         switch match(quote: quote, lines: lines) {
-        case .unique(let indices): return indices
+        case .unique(let ranges): return ranges
         case .ambiguous: return []
         case .missing:
-            guard case .unique(let indices) = match(quote: quote, lines: fallbackLines) else { return [] }
-            return indices.map { lines.count + $0 }
+            guard case .unique(let ranges) = match(quote: quote, lines: fallbackLines) else { return [] }
+            return ranges.map { TextMatch(line: lines.count + $0.line, range: $0.range) }
         }
     }
 
     private enum Match {
         case missing, ambiguous
-        case unique([Int])
+        case unique([TextMatch])
     }
 
     private static func match(quote: String, lines: [String]) -> Match {
@@ -24,7 +39,7 @@ public enum HighlightMatcher {
         var text = ""
         var spans: [(line: Int, range: NSRange)] = []
         for (index, line) in lines.enumerated() {
-            let content = normalized(line)
+            let content = normalizedLine(line)
             guard !content.isEmpty else { continue }
             if !text.isEmpty { text += "\n" }
             let start = text.utf16.count
@@ -52,7 +67,45 @@ public enum HighlightMatcher {
         guard !matches.isEmpty else { return .missing }
         guard matches.count == 1 else { return .ambiguous }
         let match = matches[0].range(at: 1)
-        return .unique(spans.filter { NSIntersectionRange($0.range, match).length > 0 }.map(\.line))
+        return .unique(spans.compactMap { span in
+            let overlap = NSIntersectionRange(span.range, match)
+            guard overlap.length > 0 else { return nil }
+            let local = NSRange(location: overlap.location - span.range.location, length: overlap.length)
+            return TextMatch(line: span.line, range: originalRange(local, in: lines[span.line],
+                                                                   normalizedLength: span.range.length))
+        })
+    }
+
+    private static func originalRange(_ range: NSRange, in line: String, normalizedLength: Int) -> NSRange {
+        if line.utf8.count == normalizedLength, line.utf8.allSatisfy({ $0 < 128 }) { return range }
+
+        // Measure the normalized text outside each end of the match. Searching original
+        // grapheme boundaries keeps a partial match inside a ligature on its whole glyph.
+        let boundaries = Array(line.indices) + [line.endIndex]
+        func boundary(omitting units: Int, fromStart: Bool) -> String.Index {
+            var low = 0
+            var high = boundaries.count - 1
+            while low < high {
+                let middle = (low + high + 1) / 2
+                let index = boundaries[fromStart ? middle : boundaries.count - 1 - middle]
+                let outside = fromStart ? line[..<index] : line[index...]
+                if normalizedLine(String(outside)).utf16.count <= units { low = middle }
+                else { high = middle - 1 }
+            }
+            return boundaries[fromStart ? low : boundaries.count - 1 - low]
+        }
+
+        let start = boundary(omitting: range.location, fromStart: true)
+        let end = boundary(omitting: normalizedLength - NSMaxRange(range), fromStart: false)
+        return NSRange(start..<end, in: line)
+    }
+
+    private static func normalizedLine(_ text: String) -> String {
+        guard text.contains(where: \.isNewline) else { return normalized(text) }
+        return text.split(whereSeparator: \.isNewline)
+            .map { normalized(String($0)) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
     }
 
     private static func normalized(_ text: String) -> String {
