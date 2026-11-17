@@ -30,6 +30,7 @@ Ad-hoc beta builds are not notarized by Apple, and Gatekeeper may block them. If
 - The **highlighter** button saves the selected passage without contacting the agent.
 - **Control–Shift–H** opens the sidebar: search recent conversations, view this page's threads and highlights, or open Settings.
 - **Ask about this** starts a conversation from a saved highlight. Open a thread in the sidebar to continue it. Codex threads keep their own agent session; API threads retain their conversation history.
+- Click the **model name** below the question field to choose a model for this conversation. **Use as default** saves it for new threads; configure the provider and key in **Settings → Models**.
 - **Escape** closes the panel. **Stop** interrupts the agent request.
 
 Questions include captured text and the document's saved highlights. Codex also receives the available window image; API images require opting in for a vision model. A window capture covers the chosen window, not the unread pages of an entire paper.

@@ -41,12 +41,15 @@ final class LibraryStoreTests: XCTestCase {
         let first = ThreadRecord(documentID: source.documentID, title: "First question", messages: [
             ChatMessage(role: .user, body: "Explain this", context: source),
             ChatMessage(role: .assistant, body: "An explanation"),
-        ], providerSessionID: "session-one", agent: AgentConfiguration())
+        ], providerSessionID: "session-one", agent: AgentConfiguration(codexModel: "model-one"))
         let second = ThreadRecord(documentID: source.documentID, title: "Another question", messages: [
             ChatMessage(role: .user, body: "What are the limits?", context: source),
         ], providerSessionID: "session-two")
         try await reopened.update { $0.threads = [first, second] }
-        try await reopened.update { $0.threads[0].messages[1].body = "Updated explanation" }
+        try await reopened.update {
+            $0.threads[0].messages[1].body = "Updated explanation"
+            $0.threads[0].agent?.codexModel = "model-two"
+        }
 
         let final = try LibraryStore(directory: directory)
         XCTAssertEqual(final.state, reopened.state)
@@ -54,7 +57,8 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(final.state.threads[1], second)
         XCTAssertEqual(final.state.threads[0].providerSessionID, "session-one")
         XCTAssertEqual(final.state.threads[0].messages[0].context, source)
-        XCTAssertEqual(final.state.threads[0].agent, first.agent)
+        XCTAssertEqual(final.state.threads[0].agent?.codexModel, "model-two")
+        XCTAssertEqual(final.state.threads[0].agent?.backend, .codex)
 
         try await final.update {
             $0.documents.append(DocumentRecord(id: "other", title: "Other", appName: "Preview"))

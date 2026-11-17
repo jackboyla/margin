@@ -1,10 +1,12 @@
 # Model providers
 
-Open **Settings → Models**, choose **Answer with**, and save. New threads use those settings. Existing threads keep their backend and API model settings.
+Open **Settings → Models**, choose the default provider and model, and save. New threads use that default.
+
+Click the model below the question field to change it for this conversation, including follow-ups. **Use as default** also saves that choice for future threads. An existing conversation keeps its provider and server; start a new thread to change providers. Server addresses and keys are configured in Settings.
 
 ## Codex
 
-Install and sign in to [Codex CLI](https://github.com/openai/codex), then select its executable and a working folder. Margin starts Codex with read-only tools and keeps a separate agent session for each thread. Available window images accompany captured text. Codex manages its own sign-in and session files.
+Install and sign in to [Codex CLI](https://github.com/openai/codex), then select its executable and a working folder. Margin starts Codex with read-only tools and keeps a separate agent session for each thread. You can set a Codex model or leave it empty to use the CLI default. Available window images accompany captured text. Codex manages its own sign-in and session files.
 
 ## OpenAI-compatible APIs
 

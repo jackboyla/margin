@@ -88,7 +88,7 @@ struct SettingsView: View {
 
     private var modelSettings: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Your model, your choice.").font(.headline)
+            Text("Default model for new conversations").font(.headline)
             Picker("Answer with", selection: $model.agentConfiguration.backend) {
                 Text("Codex agent").tag(AgentConfiguration.Backend.codex)
                 Text("OpenAI-compatible API").tag(AgentConfiguration.Backend.openAI)
@@ -96,6 +96,10 @@ struct SettingsView: View {
             if model.agentConfiguration.backend == .codex {
                 Text("Uses your existing Codex sign-in and read-only tools. Each thread keeps its own agent session.")
                     .font(.caption).foregroundStyle(.secondary)
+                TextField("Codex model (empty uses Codex default)", text: Binding(
+                    get: { model.agentConfiguration.codexModel ?? "" },
+                    set: { model.agentConfiguration.codexModel = $0.isEmpty ? nil : $0 }))
+                    .textFieldStyle(.roundedBorder)
                 field("Codex executable", text: $model.executablePath)
                 field("Working folder", text: $model.workspacePath)
             } else {
@@ -134,11 +138,11 @@ struct SettingsView: View {
                 Text("Keys stay in macOS Keychain. API conversations use Chat Completions; coding-agent tools remain available through Codex.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Button("Save model settings") {
+            Button("Save default model") {
                 do { try model.saveAgentSettings(apiKey: apiKey) }
                 catch { model.error = error.localizedDescription }
             }.buttonStyle(.borderedProminent).tint(.orange)
-            Text("New threads use these settings. Existing threads keep their original model and backend.")
+            Text("New threads use these settings. Change a conversation’s model directly in its question box.")
                 .font(.caption).foregroundStyle(.secondary)
         }
     }

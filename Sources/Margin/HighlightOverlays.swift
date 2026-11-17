@@ -26,8 +26,7 @@ final class HighlightOverlays {
         window.contentView = drawing
         model.onCapture = { [weak self] result in self?.show(result) }
         model.onLibraryChange = { [weak self] in
-            guard let self, let current = self.current else { return }
-            self.show(current)
+            self?.scheduleRefresh()
         }
         // Redraw only after interaction settles. No continuous screen recording or timer.
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel, .leftMouseUp, .keyUp]) { [weak self] _ in
@@ -62,7 +61,8 @@ final class HighlightOverlays {
                 if needsRefresh { scheduleRefresh() }
             }
             do {
-                let target = try model.capture.currentTarget()
+                let pinned = try model.capture.currentTarget()
+                let target = try await model.capture.resolve(target: pinned)
                 let key = SourceIdentity.documentID(bundleID: target.bundleID, title: target.title, url: target.url)
                 guard model.library.highlights.contains(where: { $0.documentID == key }) else { return }
                 let result = try await model.capture.capture(target: target, attachmentDirectory: model.attachments, persistImage: false)
@@ -77,7 +77,7 @@ final class HighlightOverlays {
               let active = try? model.capture.currentTarget(),
               active.pid == captured.target.pid, active.windowID == captured.target.windowID,
               active.frame == captured.target.frame,
-              active.url == captured.target.url, active.title == captured.target.title else {
+              active.title.isEmpty || active.title == captured.target.title else {
             current = nil
             window.orderOut(nil)
             return

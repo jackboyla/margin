@@ -13,7 +13,7 @@ struct ComposerView: View {
             HStack {
                 Image(systemName: "text.bubble.fill").foregroundStyle(.orange).font(.title3)
                 Text("Margin").font(.headline)
-                Text(model.activeAgent.label).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+
                 Spacer()
                 Button(action: history) { Image(systemName: "sidebar.right") }.help("Recent threads · ⌃⇧H")
                 Button(action: close) { Image(systemName: "xmark") }.help("Close · Esc")
@@ -54,9 +54,9 @@ struct ConversationView: View {
                     Spacer(minLength: 4)
                     Button { model.saveHighlight() } label: { Image(systemName: "highlighter") }
                         .help("Save the current selection without asking a question")
-                        .disabled(model.capturing)
+                        .disabled(model.preparingQuestion)
                     Button { model.beginCapture(newThread: false) } label: { Image(systemName: "arrow.clockwise") }
-                        .help("Capture the source window again").disabled(model.capturing)
+                        .help("Capture the source window again").disabled(model.preparingQuestion)
                 }.buttonStyle(.plain)
                 if let selection = context.selection, !selection.isEmpty {
                     HStack(alignment: .top) {
@@ -68,7 +68,7 @@ struct ConversationView: View {
                     .padding(10).background(.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
                 }
             } else {
-                Text("Open a page or document, then press Control–Shift–Space to ask about it.")
+                Text(model.capturing ? (model.target?.appName ?? "Current window") : "Open a page or document, then press Control–Shift–Space to ask about it.")
                     .font(.callout).foregroundStyle(.secondary)
             }
 
@@ -113,8 +113,11 @@ struct ConversationView: View {
                 Divider()
             }
 
-            if model.capturing {
-                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Reading this window…").font(.caption) }
+            if model.capturing || model.preparingQuestion {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(model.preparingQuestion ? "Preparing your question…" : "Getting page context — you can type now").font(.caption)
+                }
             }
             if let error = model.error {
                 ScrollView { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
@@ -141,9 +144,10 @@ struct ConversationView: View {
                 .textFieldStyle(.plain).font(.body).lineLimit(2...5).focused($focused)
                 .padding(10).background(.background.opacity(0.7), in: RoundedRectangle(cornerRadius: 9))
                 .onSubmit { model.send() }
+            ModelChoiceView(model: model)
             HStack {
                 Button("New thread") { model.newThread() }.buttonStyle(.plain).font(.caption)
-                    .disabled(model.capturing)
+                    .disabled(model.preparingQuestion)
                 Spacer()
                 if model.runningThreadID != nil {
                     Button("Stop", role: .destructive) { model.cancel() }
@@ -151,10 +155,59 @@ struct ConversationView: View {
                     Button("Ask", systemImage: "arrow.up") { model.send() }
                         .keyboardShortcut(.return, modifiers: .command)
                         .buttonStyle(.borderedProminent).tint(.orange)
-                        .disabled(model.capturing || model.context == nil || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .disabled(!model.canAsk || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
         }.onAppear { DispatchQueue.main.async { focused = true } }
+    }
+}
+
+struct ModelChoiceView: View {
+    @ObservedObject var model: AppModel
+    @State private var showingChoices = false
+
+    var body: some View {
+        Button { showingChoices.toggle() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "sparkles")
+                Text(model.activeAgent.label.isEmpty ? "Choose a model" : model.activeAgent.label).lineLimit(1)
+                Image(systemName: "chevron.down").font(.caption2)
+            }.font(.caption).foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .disabled(model.preparingQuestion || model.runningThreadID != nil)
+        .popover(isPresented: $showingChoices, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Model for this conversation").font(.headline)
+                Picker("Provider", selection: $model.composerConfiguration.backend) {
+                    Text("Codex").tag(AgentConfiguration.Backend.codex)
+                    Text("OpenAI-compatible API").tag(AgentConfiguration.Backend.openAI)
+                }.disabled(model.selectedThread != nil)
+                if model.composerConfiguration.backend == .codex {
+                    TextField("Codex default", text: Binding(
+                        get: { model.composerConfiguration.codexModel ?? "" },
+                        set: { model.composerConfiguration.codexModel = $0.isEmpty ? nil : $0 }))
+                        .textFieldStyle(.roundedBorder).accessibilityLabel("Codex model")
+                    Text("Leave empty to use your Codex default.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    TextField("Model name", text: $model.composerConfiguration.api.model)
+                        .textFieldStyle(.roundedBorder).accessibilityLabel("API model")
+                    Text(model.composerConfiguration.api.baseURL).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Toggle("Include window images", isOn: $model.composerConfiguration.includesImages)
+                    Text("Configure the server and key in Settings → Models.").font(.caption).foregroundStyle(.secondary)
+                }
+                if model.selectedThread != nil {
+                    Text("The next reply uses this model with the conversation’s history. Start a new thread to change providers.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack {
+                    Button("Use as default") { model.useComposerModelAsDefault() }
+                    Spacer()
+                    Button("Done") { showingChoices = false }.keyboardShortcut(.defaultAction)
+                }
+            }.padding(16).frame(width: 300)
+        }
     }
 }
 
@@ -202,7 +255,7 @@ struct SidebarView: View {
                                 VStack(alignment: .leading, spacing: 7) {
                                     Text(highlight.quote).font(.callout).lineLimit(5).textSelection(.enabled)
                                     HStack {
-                                        Button("Ask about this", systemImage: "text.bubble") { model.useHighlight(highlight) }.disabled(model.capturing)
+                                        Button("Ask about this", systemImage: "text.bubble") { model.useHighlight(highlight) }.disabled(model.preparingQuestion)
                                         Spacer()
                                         Button(role: .destructive) { model.removeHighlight(highlight.id) } label: { Image(systemName: "trash") }
                                             .help("Delete highlight")
@@ -222,7 +275,7 @@ struct SidebarView: View {
                                     }
                                     .frame(maxWidth: .infinity, alignment: .leading).padding(13)
                                     .background(model.selectedThreadID == thread.id ? Color.orange.opacity(0.14) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
-                                }.buttonStyle(.plain).disabled(model.capturing)
+                                }.buttonStyle(.plain).disabled(model.preparingQuestion)
                             }
                             if threads.isEmpty { empty("Your conversations will appear here.") }
                         }
@@ -236,7 +289,7 @@ struct SidebarView: View {
                     Button("New thread", systemImage: "square.and.pencil") {
                         model.newThread()
                         model.sidebarShowsConversation = true
-                    }.disabled(model.capturing)
+                    }.disabled(model.preparingQuestion)
                 }.buttonStyle(.plain)
                 if let error = model.error { Text(error).font(.caption).foregroundStyle(.red).lineLimit(4) }
             }

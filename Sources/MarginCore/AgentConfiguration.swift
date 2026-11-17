@@ -8,14 +8,16 @@ public struct AgentConfiguration: Codable, Equatable, Sendable {
     public var backend: Backend
     public var api: OpenAIConfiguration
     public var includesImages: Bool
+    public var codexModel: String?
 
     public init(backend: Backend = .codex,
                 api: OpenAIConfiguration = .init(baseURL: "http://localhost:11434/v1", model: ""),
-                includesImages: Bool = false) {
+                includesImages: Bool = false, codexModel: String? = nil) {
         self.backend = backend
         self.api = api
         self.includesImages = includesImages
+        self.codexModel = codexModel
     }
 
-    public var label: String { backend == .codex ? "Codex" : api.model }
+    public var label: String { backend == .codex ? (codexModel.flatMap { $0.isEmpty ? nil : $0 } ?? "Codex default") : api.model }
 }

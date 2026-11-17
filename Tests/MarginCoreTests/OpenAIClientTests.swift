@@ -2,6 +2,15 @@ import XCTest
 @testable import MarginCore
 
 final class OpenAIClientTests: XCTestCase {
+    func testModelSettingsDecodeOlderPreferencesAndPersistOverride() throws {
+        let old = Data(#"{"backend":"codex","api":{"baseURL":"http://localhost:11434/v1","model":"local","tokenLimitField":"max_tokens"},"includesImages":false}"#.utf8)
+        var configuration = try JSONDecoder().decode(AgentConfiguration.self, from: old)
+        XCTAssertNil(configuration.codexModel)
+        configuration.codexModel = "chosen-model"
+        XCTAssertEqual(try JSONDecoder().decode(AgentConfiguration.self,
+            from: JSONEncoder().encode(configuration)), configuration)
+    }
+
     func testEndpointValidationAndRequestSerialization() throws {
         let client = OpenAIClient()
         var config = OpenAIConfiguration(baseURL: "http://localhost:11434/v1/", model: "local-model")

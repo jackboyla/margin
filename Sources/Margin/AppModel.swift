@@ -10,6 +10,7 @@ final class AppModel: ObservableObject {
     @Published var draft = ""
     @Published var selectedThreadID: UUID?
     @Published var capturing = false
+    @Published private(set) var preparingQuestion = false
     @Published var runningThreadID: UUID?
     @Published var activity = ""
     @Published var error: String?
@@ -18,6 +19,8 @@ final class AppModel: ObservableObject {
     @Published var sidebarShowsConversation = false
     @Published var liveAnswer = ""
     @Published var agentConfiguration: AgentConfiguration
+    @Published var composerConfiguration: AgentConfiguration
+    private var defaultConfiguration: AgentConfiguration
     @Published private(set) var unsavedAnswer: String?
     @Published var executablePath: String {
         didSet { UserDefaults.standard.set(executablePath, forKey: "agentExecutable") }
@@ -32,6 +35,9 @@ final class AppModel: ObservableObject {
     private let store: LibraryStore
     private let agent = CodexAgent()
     private var requestTask: Task<Void, Never>?
+    private var captureTask: Task<Void, Never>?
+    private var captureGeneration = 0
+    private var capturedWindow: CapturedWindow?
     private(set) var target: WindowTarget?
     var onCapture: ((CapturedWindow) -> Void)?
     var onLibraryChange: (() -> Void)?
@@ -41,7 +47,10 @@ final class AppModel: ObservableObject {
         self.attachments = directory.appendingPathComponent("Attachments", isDirectory: true)
         self.store = try LibraryStore(directory: directory)
         self.library = store.state
-        self.agentConfiguration = Self.preference("agentConfiguration") ?? AgentConfiguration()
+        let configuration: AgentConfiguration = Self.preference("agentConfiguration") ?? AgentConfiguration()
+        self.agentConfiguration = configuration
+        self.defaultConfiguration = configuration
+        self.composerConfiguration = configuration
         self.executablePath = UserDefaults.standard.string(forKey: "agentExecutable")
             ?? CodexAgent.defaultExecutable()?.path ?? "/opt/homebrew/bin/codex"
         let workspace = directory.appendingPathComponent("AgentWorkspace", isDirectory: true)
@@ -56,7 +65,8 @@ final class AppModel: ObservableObject {
     }
     var recentThreads: [ThreadRecord] { library.threads.sorted { $0.updatedAt > $1.updatedAt } }
     var currentThreads: [ThreadRecord] { recentThreads.filter { $0.documentID == pageContext?.documentID } }
-    var activeAgent: AgentConfiguration { selectedThread?.agent ?? (selectedThread == nil ? agentConfiguration : AgentConfiguration()) }
+    var activeAgent: AgentConfiguration { composerConfiguration }
+    var canAsk: Bool { !preparingQuestion && (context != nil || captureTask != nil) }
 
     static func preference<T: Decodable>(_ key: String) -> T? {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
@@ -74,9 +84,30 @@ final class AppModel: ObservableObject {
             }
             try Credentials.save(apiKey, account: apiCredentialAccount(agentConfiguration.api))
         }
-        UserDefaults.standard.set(try JSONEncoder().encode(agentConfiguration), forKey: "agentConfiguration")
-        notice = "Model settings saved. Existing conversations keep their model."
+        try saveDefault(agentConfiguration)
+        if selectedThread == nil { composerConfiguration = agentConfiguration }
+        notice = "Default model saved. Existing conversations keep their model."
         error = nil
+    }
+
+    func useComposerModelAsDefault() {
+        do {
+            try saveDefault(composerConfiguration)
+            agentConfiguration = composerConfiguration
+            notice = "Default model saved for new conversations."
+            error = nil
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func saveDefault(_ configuration: AgentConfiguration) throws {
+        if configuration.backend == .openAI {
+            _ = try configuration.api.completionURL()
+            guard !configuration.api.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw OpenAIClientError.configuration("Enter a model name before saving.")
+            }
+        }
+        UserDefaults.standard.set(try JSONEncoder().encode(configuration), forKey: "agentConfiguration")
+        defaultConfiguration = configuration
     }
 
     func document(for thread: ThreadRecord) -> DocumentRecord? {
@@ -84,27 +115,52 @@ final class AppModel: ObservableObject {
     }
 
     func beginCapture(newThread: Bool) {
-        guard !capturing else { return }
+        guard !preparingQuestion else { return }
+        cancelCapture()
         context = nil
         target = nil
+        capturedWindow = nil
         do {
+            // Pin the source before showing the panel; all document IPC runs asynchronously.
             let source = try capture.currentTarget()
+            target = source
             capturing = true
             error = nil
             notice = nil
-            if newThread { selectedThreadID = nil }
-            Task {
-                defer { capturing = false }
+            if newThread { selectedThreadID = nil; composerConfiguration = defaultConfiguration }
+            let generation = captureGeneration
+            let startingConfiguration = composerConfiguration
+            captureTask = Task {
+                defer {
+                    if generation == captureGeneration { capturing = false; captureTask = nil }
+                }
                 do {
                     let result = try await capture.capture(target: source, attachmentDirectory: attachments, persistImage: false)
-                    accept(result)
-                } catch { self.error = error.localizedDescription }
+                    try Task.checkCancellation()
+                    guard generation == captureGeneration else { return }
+                    accept(result, startingConfiguration: startingConfiguration)
+                } catch {
+                    if generation == captureGeneration, !(error is CancellationError) {
+                        self.error = error.localizedDescription
+                    }
+                }
             }
         } catch { self.error = error.localizedDescription }
     }
 
-    private func accept(_ result: CapturedWindow) {
-        if let thread = selectedThread, thread.documentID != result.context.documentID { selectedThreadID = nil }
+    private func cancelCapture() {
+        captureGeneration += 1
+        captureTask?.cancel()
+        captureTask = nil
+        capturing = false
+    }
+
+    private func accept(_ result: CapturedWindow, startingConfiguration: AgentConfiguration? = nil) {
+        if let thread = selectedThread, thread.documentID != result.context.documentID {
+            selectedThreadID = nil
+            if startingConfiguration == composerConfiguration { composerConfiguration = defaultConfiguration }
+        }
+        capturedWindow = result
         context = result.context
         pageContext = result.context
         target = result.target
@@ -113,14 +169,18 @@ final class AppModel: ObservableObject {
     }
 
     func newThread() {
-        guard !capturing else { return }
+        guard !preparingQuestion else { return }
         selectedThreadID = nil
+        composerConfiguration = defaultConfiguration
         draft = ""
         error = nil
     }
 
     func openThread(_ thread: ThreadRecord) {
-        guard !capturing else { return }
+        guard !preparingQuestion else { return }
+        cancelCapture()
+        capturedWindow = nil
+        composerConfiguration = thread.agent ?? AgentConfiguration()
         selectedThreadID = thread.id
         draft = ""
         context = thread.messages.reversed().compactMap(\.context).first
@@ -131,7 +191,9 @@ final class AppModel: ObservableObject {
     }
 
     func useHighlight(_ highlight: Highlight) {
-        guard !capturing else { return }
+        guard !preparingQuestion else { return }
+        cancelCapture()
+        capturedWindow = nil
         guard let doc = library.documents.first(where: { $0.id == highlight.documentID }) else { return }
         context = SourceContext(documentID: doc.id, appName: doc.appName, bundleID: "",
                                 title: doc.title, url: doc.url, text: highlight.contextText,
@@ -143,14 +205,14 @@ final class AppModel: ObservableObject {
     }
 
     func saveHighlight() {
-        guard !capturing else { return }
-        capturing = true
+        guard !preparingQuestion else { return }
+        preparingQuestion = true
         Task {
-            defer { capturing = false }
+            defer { preparingQuestion = false }
             do {
-                if let target {
-                    let result = try await capture.capture(target: target, attachmentDirectory: attachments, persistImage: false)
-                    accept(result)
+                await captureTask?.value
+                if let capturedWindow {
+                    accept(try await capture.refresh(capturedWindow, attachmentDirectory: attachments, persistImage: false))
                 }
                 guard let source = context,
                       let quote = source.selection?.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty else {
@@ -180,31 +242,36 @@ final class AppModel: ObservableObject {
     }
 
     func send() {
-        guard runningThreadID == nil, !capturing else { return }
+        guard runningThreadID == nil, canAsk else { return }
         let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !question.isEmpty else { return }
-        capturing = true
+        preparingQuestion = true
         Task {
+            defer { preparingQuestion = false }
             do {
-                if let target {
-                    let result = try await capture.capture(target: target, attachmentDirectory: attachments)
-                    accept(result)
+                await captureTask?.value
+                if let capturedWindow {
+                    let images = activeAgent.backend == .codex || activeAgent.includesImages
+                    accept(try await capture.refresh(capturedWindow, attachmentDirectory: attachments, persistImage: images))
                 }
                 guard let source = context else {
-                    error = "Capture the window you want to ask about first."
-                    capturing = false
+                    if error == nil { error = "Capture the window you want to ask about first." }
                     return
                 }
                 await start(question: question, source: source)
-                capturing = false
-            } catch { capturing = false; self.error = error.localizedDescription }
+            } catch { self.error = error.localizedDescription }
         }
     }
 
     private func start(question: String, source: SourceContext) async {
-        let thread = selectedThread ?? ThreadRecord(documentID: source.documentID, title: String(question.prefix(80)),
-                                                    agent: agentConfiguration)
-        let configuration = thread.agent ?? AgentConfiguration()
+        var thread = selectedThread ?? ThreadRecord(documentID: source.documentID, title: String(question.prefix(80)),
+                                                    agent: composerConfiguration)
+        if let previous = thread.agent, previous.backend != composerConfiguration.backend {
+            error = "Start a new conversation to change providers."
+            return
+        }
+        let configuration = composerConfiguration
+        thread.agent = configuration
         guard thread.documentID == source.documentID else {
             error = "This page belongs to a different conversation. Start a new thread to ask about it."
             return
@@ -215,6 +282,7 @@ final class AppModel: ObservableObject {
                 Self.upsert(source, in: &library)
                 if !library.threads.contains(where: { $0.id == thread.id }) { library.threads.append(thread) }
                 guard let index = library.threads.firstIndex(where: { $0.id == thread.id }) else { return }
+                library.threads[index].agent = configuration
                 library.threads[index].messages.append(ChatMessage(role: .user, body: question, context: source))
                 library.threads[index].messages.append(reply)
                 library.threads[index].updatedAt = Date()
@@ -242,7 +310,10 @@ final class AppModel: ObservableObject {
                         prompt: prompt, imagePath: imagePath,
                         sessionID: thread.providerSessionID,
                         workingDirectory: URL(fileURLWithPath: workspacePath),
-                        executable: URL(fileURLWithPath: executablePath), model: nil,
+                        executable: URL(fileURLWithPath: executablePath), model: configuration.codexModel.flatMap {
+                            let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
+                            return value.isEmpty ? nil : value
+                        },
                         onSession: { [weak self] sessionID in
                             guard let self else { return }
                             do {
