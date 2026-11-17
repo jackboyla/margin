@@ -8,6 +8,7 @@ final class AppModel: ObservableObject {
     @Published var context: SourceContext?
     @Published var pageContext: SourceContext?
     @Published var draft = ""
+    @Published var composerFocusRequest = 0
     @Published var selectedThreadID: UUID?
     @Published var capturing = false
     @Published private(set) var preparingQuestion = false

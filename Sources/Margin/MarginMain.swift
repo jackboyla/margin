@@ -97,6 +97,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composer.setFrameOrigin(NSPoint(x: min(max(point.x + 14, visible.minX), visible.maxX - 420),
                                        y: max(visible.minY, min(point.y - height - 12, visible.maxY - height))))
         composer.makeKeyAndOrderFront(nil)
+        model.composerFocusRequest += 1
     }
 
     private func fitComposer(_ size: CGSize) {

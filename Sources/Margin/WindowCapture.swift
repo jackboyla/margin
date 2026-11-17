@@ -135,7 +135,7 @@ final class WindowCapture {
                          persistImage: Bool, reusing previous: CapturedWindow?) async throws -> CapturedWindow {
         let source = try await readSource(target, includeContent: true)
         let nativeText = source.accessibility.hasVisibleCoverage
-            ? source.accessibility.lines.map(\.text).joined(separator: "\n") : ""
+            ? source.accessibility.visibleText : ""
         var warnings: [String] = []
         var image: CGImage?
         var lines: [PositionedTextLine] = []
@@ -203,7 +203,7 @@ final class WindowCapture {
         let finalSource = try await readSource(source.target, includeContent: image != nil && !nativeText.isEmpty)
         if image != nil, !nativeText.isEmpty,
            !finalSource.accessibility.hasVisibleCoverage ||
-            finalSource.accessibility.lines.map(\.text).joined(separator: "\n") != nativeText {
+            finalSource.accessibility.visibleText != nativeText {
             throw WindowCaptureError.sourceChanged
         }
         guard finalSource.target.frame == source.target.frame else { throw WindowCaptureError.sourceChanged }
@@ -259,6 +259,8 @@ final class WindowCapture {
         var selection: String?
         var lines: [PositionedTextLine] = []
         var hasVisibleCoverage = true
+        var unpositionedText: [String] = []
+        var visibleText: String { (lines.map(\.text) + unpositionedText).joined(separator: "\n") }
     }
 
     private struct SourceSnapshot: Sendable {
@@ -331,6 +333,7 @@ final class WindowCapture {
             content.selection = accessible.selection
             content.lines = accessible.lines
             content.hasVisibleCoverage = accessible.hasVisibleCoverage
+            content.unpositionedText = accessible.unpositionedText
         }
         return SourceSnapshot(
             target: WindowTarget(pid: app.processIdentifier, windowID: window.id,
@@ -379,7 +382,16 @@ final class WindowCapture {
                 if captureLineBounds, Date() < deadline {
                     let positioned = positionedLines(item, text: fragment, windowFrame: frame, deadline: deadline)
                     result.lines.append(contentsOf: positioned.lines)
-                    if !positioned.complete { result.hasVisibleCoverage = false }
+                    if !positioned.complete {
+                        if role == kAXStaticTextRole, fragment.rangeOfCharacter(from: .newlines) == nil,
+                           let bounds = self.frame(item), bounds.width > 1, bounds.height > 1,
+                           frame.contains(bounds) {
+                            // Static labels may omit usable range bounds. Keep their text out of highlight geometry.
+                            result.unpositionedText.append(fragment)
+                        } else {
+                            result.hasVisibleCoverage = false
+                        }
+                    }
                 }
                 if fragment.count < value.count { result.hasVisibleCoverage = false }
                 if fragments.last != fragment {
@@ -402,7 +414,7 @@ final class WindowCapture {
                                  deadline: Date) -> (lines: [PositionedTextLine], complete: Bool) {
         guard let elementFrame = frame(element) else { return ([], false) }
         let clip = elementFrame.intersection(windowFrame)
-        guard !clip.isEmpty else { return ([], true) }
+        guard elementFrame.width > 1, elementFrame.height > 1, !clip.isEmpty else { return ([], true) }
         let value = text as NSString
         var lines: [PositionedTextLine] = []
         var complete = true

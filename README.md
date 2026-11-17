@@ -26,6 +26,7 @@ Ad-hoc beta builds are not notarized by Apple, and Gatekeeper may block them. If
 ## Use
 
 - **Control–Shift–Space** opens a question box beside the pointer. Select text before opening it, or leave the selection empty to ask about the window.
+- You can type and press **Ask** while page context loads; Margin waits for the verified source before contacting the model.
 - Select more text in the source window and return to the box to include that passage. The source page stays pinned; changing pages requires capturing the new page.
 - The **highlighter** button saves the selected passage without contacting the agent.
 - **Control–Shift–H** opens the sidebar: search recent conversations, view this page's threads and highlights, or open Settings.

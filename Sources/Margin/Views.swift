@@ -158,7 +158,16 @@ struct ConversationView: View {
                         .disabled(!model.canAsk || model.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
-        }.onAppear { DispatchQueue.main.async { focused = true } }
+        }
+        .onAppear { requestFocus() }
+        .onChange(of: model.composerFocusRequest) { _, _ in
+            if compact { requestFocus() }
+        }
+    }
+
+    private func requestFocus() {
+        focused = false
+        DispatchQueue.main.async { focused = true }
     }
 }
 

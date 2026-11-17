@@ -6,7 +6,6 @@ final class HighlightOverlays {
     private weak var model: AppModel?
     private let window: NSWindow
     private let drawing = HighlightDrawingView()
-    private var current: CapturedWindow?
     private var refreshTask: Task<Void, Never>?
     private var refreshRunning = false
     private var needsRefresh = false
@@ -78,11 +77,9 @@ final class HighlightOverlays {
               active.pid == captured.target.pid, active.windowID == captured.target.windowID,
               active.frame == captured.target.frame,
               active.title.isEmpty || active.title == captured.target.title else {
-            current = nil
             window.orderOut(nil)
             return
         }
-        current = captured
         let saved = model.library.highlights.filter { $0.documentID == captured.context.documentID }
         let accessibleText = captured.accessibleLines.map(\.text)
         let recognizedText = captured.ocrLines.map(\.text)
