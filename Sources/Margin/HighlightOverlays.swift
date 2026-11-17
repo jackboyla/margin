@@ -33,7 +33,13 @@ final class HighlightOverlays {
         }
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in Task { @MainActor in self?.scheduleRefresh() } }
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.model?.capture.prepareAccessibilityForFrontmostApplication()
+                self?.scheduleRefresh()
+            }
+        }
+        model.capture.prepareAccessibilityForFrontmostApplication()
     }
 
     private func scheduleRefresh() {

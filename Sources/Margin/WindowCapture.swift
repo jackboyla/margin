@@ -38,6 +38,7 @@ enum WindowCaptureError: LocalizedError {
     case sourceChanged
     case browserURLUnavailable
     case noReadableContent
+    case selectionLoading
 
     var errorDescription: String? {
         switch self {
@@ -47,6 +48,8 @@ enum WindowCaptureError: LocalizedError {
             return "The source window or page changed. Open Margin again from the page you want to use."
         case .browserURLUnavailable:
             return "Margin could not read this page’s URL. Allow \(WindowCapture.accessibilityPermissionName) and browser Automation access in System Settings, then try again."
+        case .selectionLoading:
+            return "This document’s text selection is still loading. Wait a moment, then try again."
         case .noReadableContent:
             return "Margin could not read this window. Allow \(WindowCapture.accessibilityPermissionName) or Screen Recording access in System Settings, then try again."
         }
@@ -77,6 +80,15 @@ final class WindowCapture {
         CGRequestScreenCaptureAccess()
     }
 
+    func prepareAccessibilityForFrontmostApplication() {
+        guard accessibilityPermission, let app = NSWorkspace.shared.frontmostApplication,
+              isChromiumBrowser(app.bundleIdentifier ?? "") else { return }
+        let pid = app.processIdentifier
+        recognitionQueue.async {
+            _ = self.attribute(AXUIElementCreateApplication(pid), kAXRoleAttribute)
+        }
+    }
+
     func currentTarget() throws -> WindowTarget {
         guard let app = NSWorkspace.shared.frontmostApplication else {
             throw WindowCaptureError.noSourceWindow
@@ -101,8 +113,17 @@ final class WindowCapture {
     }
 
     private func readSource(_ target: WindowTarget, includeContent: Bool = false) async throws -> SourceSnapshot {
-        try await queued {
-            try self.validatedSource(target, includeContent: includeContent)
+        let pinned = includeContent && !target.identityResolved ? try await readSource(target).target : target
+        let deadline = Date().addingTimeInterval(3)
+        while true {
+            do {
+                return try await queued {
+                    try self.validatedSource(pinned, includeContent: includeContent)
+                }
+            } catch WindowCaptureError.selectionLoading {
+                guard Date() < deadline else { throw WindowCaptureError.selectionLoading }
+                try await Task.sleep(for: .milliseconds(25))
+            }
         }
     }
 
@@ -290,7 +311,7 @@ final class WindowCapture {
               let window = frontWindow(pid: target.pid), window.id == target.windowID else {
             throw WindowCaptureError.sourceChanged
         }
-        let source = sourceSnapshot(window: window, app: app, includeContent: includeContent)
+        let source = try sourceSnapshot(window: window, app: app, includeContent: includeContent)
         if let url = target.url {
             guard source.target.url == url else { throw WindowCaptureError.sourceChanged }
         } else {
@@ -304,7 +325,7 @@ final class WindowCapture {
     }
 
     private nonisolated func sourceSnapshot(window: WindowRecord, app: NSRunningApplication,
-                                includeContent: Bool = false) -> SourceSnapshot {
+                                includeContent: Bool = false) throws -> SourceSnapshot {
         let application = AXUIElementCreateApplication(app.processIdentifier)
         if accessibilityPermission, isChromiumBrowser(app.bundleIdentifier ?? "") {
             // Reading the role asks Chromium to enable its page accessibility tree.
@@ -314,6 +335,19 @@ final class WindowCapture {
                 let deadline = Date().addingTimeInterval(0.5)
                 while element(application, kAXFocusedUIElementAttribute) == nil, Date() < deadline {
                     Thread.sleep(forTimeInterval: 0.025)
+                }
+                if let focused = element(application, kAXFocusedUIElementAttribute),
+                   string(focused, kAXRoleAttribute) == kAXGroupRole,
+                   let value = attribute(focused, kAXSelectedTextRangeAttribute),
+                   CFGetTypeID(value) == AXValueGetTypeID() {
+                    var range = CFRange(location: 0, length: 0)
+                    if AXValueGetValue(unsafeBitCast(value, to: AXValue.self), .cfRange, &range),
+                       range.location == 0, range.length == 0 {
+                        // Chromium PDF groups report an empty range until their selection markers load.
+                        guard attribute(focused, "AXSelectedTextMarkerRange") != nil else {
+                            throw WindowCaptureError.selectionLoading
+                        }
+                    }
                 }
             }
         }
