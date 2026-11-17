@@ -223,6 +223,10 @@ final class WindowCapture {
             struct Result: Decodable { let status: String; let matched: Int }
             guard let result = try? JSONDecoder().decode(Result.self, from: Data(value.utf8)) else { return false }
             if result.status == "changed" { throw WindowCaptureError.sourceChanged }
+            if result.status == "pdf" {
+                Self.highlightLog.info("PDF viewer received \(quotes.count) saved quotes")
+                return true
+            }
             Self.highlightLog.info("Browser paint \(result.status, privacy: .public); matched \(result.matched) of \(quotes.count) quotes")
             return result.status == "owned"
         }

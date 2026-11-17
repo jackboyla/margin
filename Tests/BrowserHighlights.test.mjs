@@ -150,3 +150,60 @@ test('normalization boundaries and CSS visibility cannot paint a different passa
   await settle(page);
   assert.equal(await page.evaluate(() => CSS.highlights.get('margin-saved-passages').size), 0);
 });
+
+test('arXiv PDFs keep the built-in viewer, tab URL and highlights during interaction', async t => {
+  // The headless shell has no PDF viewer. Full Chromium renders this generated paper.
+  const context = await chromium.launchPersistentContext('', { channel: 'chromium' });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.setContent('<p>A passage for the reader to highlight.</p>');
+  const paper = await page.pdf();
+  const paperURL = 'https://arxiv.org/pdf/2506.01844';
+  await page.route(paperURL, route => route.fulfill({ contentType: 'application/pdf', body: paper }));
+  await page.goto(paperURL);
+  const quotes = ['passage for the reader'];
+  assert.equal((await install(page, quotes, paperURL)).status, 'pdf');
+  const viewer = page.locator('iframe[title="PDF with saved highlights"]');
+  await viewer.waitFor({state: 'visible'});
+  const decoder = await context.newPage();
+  async function hasPaint() {
+    const pixels = await page.screenshot();
+    return decoder.evaluate(async png => {
+      const image = new Image();
+      image.src = 'data:image/png;base64,' + png;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = image.width;
+      canvas.height = image.height;
+      const drawing = canvas.getContext('2d');
+      drawing.drawImage(image, 0, 0);
+      const { data } = drawing.getImageData(350, 56, image.width - 350, image.height - 56);
+      let purple = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] > 200 && data[i] - data[i+1] > 12 && data[i+2] - data[i] > 12) purple++;
+      }
+      return purple > 50;
+    }, pixels.toString('base64'));
+  }
+  async function waitForPaint() {
+    const deadline = Date.now() + 5000;
+    while (!(await hasPaint())) {
+      assert.ok(Date.now() < deadline, 'Chrome did not paint the PDF text directive');
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  await waitForPaint();
+  const frame = await viewer.elementHandle();
+  assert.match(await frame.getAttribute('src'), /#:~:text=passage%20for%20the%20reader$/);
+  await page.mouse.click(700, 300);
+  await page.mouse.wheel(0, 10);
+  await install(page, quotes, paperURL);
+  assert.equal(await frame.evaluate(node => node.isConnected), true);
+  assert.equal(page.url(), paperURL);
+  await waitForPaint();
+  await page.reload();
+  await install(page, quotes, paperURL);
+  await waitForPaint();
+  await install(page, [], paperURL);
+  assert.equal(await viewer.count(), 0);
+});

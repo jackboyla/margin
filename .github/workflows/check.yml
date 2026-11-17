@@ -12,7 +12,7 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npx playwright install --with-deps chromium
       - run: npm run test:browser
   macos:
     runs-on: macos-26-intel

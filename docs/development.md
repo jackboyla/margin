@@ -35,7 +35,7 @@ The browser renderer is a bundled script, with no runtime Node dependency. Its C
 
 ```sh
 npm ci
-npx playwright install --with-deps --only-shell chromium
+npx playwright install --with-deps chromium
 npm run test:browser
 ```
 
