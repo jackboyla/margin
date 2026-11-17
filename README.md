@@ -19,7 +19,8 @@ Also watch [a question with no text selected](https://github.com/jackboyla/margi
 1. Download the DMG from [GitHub Releases](https://github.com/jackboyla/margin/releases).
 2. Open the DMG, drag **Margin** to **Applications**, then open it from Applications.
 3. In **Settings → Reading**, grant Device Control (Accessibility on macOS 26) and Screen Capture. macOS 27 calls the first permission **Device Control and Data Access**. Press **Control–Shift–H** to return to Margin after granting access. Allow Chrome or Safari Automation when macOS asks so Margin can associate notes with the page URL.
-4. In **Settings → Models**, choose Codex, Claude Code or an API provider and save your settings. Sign in to your chosen CLI first; API setup needs a model name and any required API key.
+4. In Chrome, enable **View → Developer → Allow JavaScript from Apple Events** to keep webpage highlights attached to the text while scrolling. Margin paints saved passages inside the page; no extension is required.
+5. In **Settings → Models**, choose Codex, Claude Code or an API provider and save your settings. Sign in to your chosen CLI first; API setup needs a model name and any required API key.
 
 Ad-hoc beta builds are not notarized by Apple, and Gatekeeper may block them. If you trust the download, attempt to open it, then use **System Settings → Privacy & Security → Open Anyway** when macOS offers it. See [Apple's opening guidance](https://support.apple.com/en-us/102445) and check each release's signing notice.
 
@@ -61,7 +62,7 @@ Builds use ad-hoc signing by default. Keep the app at a stable path when grantin
 ## Current limits
 
 - The PDF workflow is tested in Chrome. Safari PDF text selection is not yet verified on macOS 26 or later.
-- Restored highlights use native text positions in Chromium browsers, with text recognition as a fallback. They do not modify the webpage or PDF. Native ranges follow the text during scrolling; image-only highlights refresh after scrolling stops. A quote must match uniquely; missing, repeated or partial OCR words stay unpainted and remain in the sidebar. Math, columns, and scanned PDFs can defeat matching.
+- Chrome webpages use browser-rendered text highlights when JavaScript from Apple Events is enabled. Their ranges move with the page during scrolling and reflow. PDFs, other apps and browsers without this option use native overlays; those can lag during scrolling, and image-only highlights refresh after motion stops. A quote must match uniquely; missing or repeated text stays saved in the sidebar. Frames, math, columns and scanned PDFs can prevent painting.
 - Chrome and Safari page identity uses their URL. Other apps depend on the document URL they expose or their window title; changed titles can create separate records.
 - Each arXiv paper version has its own identity. HTML, abstract, and PDF URLs for the same identifier share a library entry; unrelated query parameters and fragment routes remain significant.
 - Shortcuts are fixed.

@@ -79,6 +79,8 @@ struct SettingsView: View {
                     }.buttonStyle(.link)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(6)
             }.id(refresh)
+            Text("For highlights that scroll with Chrome pages, turn on View → Developer → Allow JavaScript from Apple Events in Chrome.")
+                .font(.caption).foregroundStyle(.secondary)
             Text("After granting access, press Control–Shift–H to return. Allow browser Automation when macOS asks so your notes return to the page's URL.")
                 .font(.caption).foregroundStyle(.secondary)
         }

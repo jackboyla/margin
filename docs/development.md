@@ -29,12 +29,24 @@ CODE_SIGN_IDENTITY="Your development signing identity" bash scripts/build-app.sh
 
 `CODE_SIGN_KEYCHAIN` optionally selects a dedicated keychain. Unlock it before building. The script defaults to ad-hoc signing when no identity is supplied. Keep signing keys, passwords, Codex credentials and VM disks out of Git. A local development signature does not provide notarization for distribution.
 
+## Browser renderer checks
+
+The browser renderer is a bundled script, with no runtime Node dependency. Its Chromium tests exercise exact ranges, nested scrolling, clicks, reflow, DOM replacement, navigation and deletion against a local fixture:
+
+```sh
+npm ci
+npx playwright install --with-deps --only-shell chromium
+npm run test:browser
+```
+
+These checks do not establish macOS Automation permission, shortcut capture or PDF overlay behavior. For webpage acceptance, enable Chrome's **View → Developer → Allow JavaScript from Apple Events** in the guest and repeat the scrolling trial on a regular HTML page.
+
 ## Browser acceptance trial
 
 Use a public arXiv paper in the guest's existing browser. Exercise the actual app and agent, not a substituted response:
 
 1. Press Control–Shift–Space without selecting text, type immediately, and ask about the visible page. Confirm the source and answer match it. Escape should return keyboard use to the browser; Option–backtick must not open Margin.
-2. Select passages, open the composer and save several highlights without asking questions. Save a short phrase that wraps onto a second visual line, leaving unselected words at both ends. Check that only the saved phrase is painted. Click blank page space and scroll while the phrase remains visible; native highlights must stay aligned without blanking. Switch apps and tabs, including same-titled tabs; highlights must not remain over unrelated content.
+2. Select passages, open the composer and save several highlights without asking questions. Save a short phrase that wraps onto a second visual line, leaving unselected words at both ends. Check that only the saved phrase is painted. Click blank page space and scroll while the phrase remains visible; webpage highlights must stay aligned without blanking. Record PDF/native overlay lag separately. Switch apps and tabs, including same-titled tabs; highlights must not remain over unrelated content.
 3. Open Control–Shift–H. Check Recent, This page, Highlights and search. Ask about a saved highlight, send a follow-up in the sidebar, and start another thread. With Codex, follow-ups must retain their agent session and independent threads must have different sessions. With an API backend, check that follow-ups retain prior messages and the selected model.
 4. Close and reopen the paper tab, then quit and reopen Margin. Check both the sidebar records and restored visible highlights. Saved records alone do not prove overlay restoration.
 5. Repeat selection and hotkey capture while highlight refreshes occur. Capture must finish without blocking typing. Open another conversation during capture and confirm the old capture cannot replace it. Submit while context loads and confirm only one request starts, with the verified source. Check that long answers scroll while the composer header and question field remain visible.

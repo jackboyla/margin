@@ -5,7 +5,19 @@ on:
 permissions:
   contents: write
 jobs:
+  browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps --only-shell chromium
+      - run: npm run test:browser
   macos:
+    needs: browser
     runs-on: macos-26-intel
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer

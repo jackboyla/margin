@@ -7,8 +7,11 @@ final class HighlightOverlays {
     private let window: NSWindow
     private let drawing = HighlightDrawingView()
     private var settlingTask: Task<Void, Never>?
+    private var pageCheckTask: Task<Void, Never>?
     private var refreshRunning = false
     private var needsRefresh = false
+    private var needsPageCheck = true
+    private var browserOwnsPage = false
     private var needsRescan = false
     private var pendingCapture: CapturedWindow?
     private var tracked: TrackedHighlights?
@@ -31,24 +34,23 @@ final class HighlightOverlays {
         model.onCapture = { [weak self] result in
             guard let self else { return }
             self.generation += 1
-            if let active = try? self.model?.capture.currentTarget(),
-               active.pid == result.target.pid, active.windowID == result.target.windowID {
-                self.pendingCapture = result
-            } else {
-                self.pendingCapture = nil
-                self.needsRescan = true
-            }
+            self.pendingCapture = result
+            self.needsPageCheck = true
             self.requestRefresh()
         }
         model.onLibraryChange = { [weak self] in
             guard let self else { return }
             self.generation += 1
-            self.needsRescan = true
+            self.tracked = nil
+            if self.model?.library.highlights.isEmpty == true { self.window.orderOut(nil) }
             self.requestRefresh()
         }
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.scrollWheel, .leftMouseUp, .leftMouseDragged, .keyUp]) { [weak self] event in
-            let moved = event.type == .scrollWheel || event.type == .leftMouseDragged || event.type == .keyUp
-            Task { @MainActor in self?.interaction(moved: moved) }
+            let type = event.type
+            Task { @MainActor in
+                self?.interaction(viewportMoved: type != .leftMouseUp,
+                                  checkPage: type == .leftMouseUp || type == .keyUp)
+            }
         }
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
@@ -58,20 +60,36 @@ final class HighlightOverlays {
                 self.model?.capture.prepareAccessibilityForFrontmostApplication()
                 if let target = try? self.model?.capture.currentTarget(),
                    target.pid != self.tracked?.target.pid || target.windowID != self.tracked?.target.windowID {
-                    self.generation += 1
                     self.tracked = nil
                     self.window.orderOut(nil)
                 }
-                self.interaction(moved: true)
+                self.interaction(viewportMoved: true, checkPage: true)
             }
         }
         model.capture.prepareAccessibilityForFrontmostApplication()
+        // Navigation can commit after the click and its settling check have finished.
+        pageCheckTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self else { return }
+                if self.model?.library.highlights.isEmpty == false,
+                   let target = try? self.model?.capture.currentTarget(),
+                   self.model?.capture.isChromiumBrowser(target.bundleID) == true {
+                    self.needsPageCheck = true
+                    self.requestRefresh()
+                }
+            }
+        }
         requestRefresh()
     }
 
-    private func interaction(moved: Bool) {
-        if moved { recognizedIsCurrent = false; viewportRevision += 1 }
-        requestRefresh()
+    private func interaction(viewportMoved: Bool, checkPage: Bool) {
+        if viewportMoved { recognizedIsCurrent = false; viewportRevision += 1 }
+        if checkPage {
+            generation += 1
+            needsPageCheck = true
+        }
+        if checkPage || !browserOwnsPage { requestRefresh() }
         scheduleSettledRefresh()
     }
 
@@ -80,9 +98,10 @@ final class HighlightOverlays {
         settlingTask = Task { [weak self] in
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled, let self else { return }
-            // A cached native range follows scrolling without another screenshot or tree walk.
-            if self.tracked == nil || self.tracked?.hasUnmatchedQuotes == true ||
-                !(self.tracked?.recognizedRectangles.isEmpty ?? true) { self.needsRescan = true }
+            self.needsPageCheck = true
+            if self.tracked?.hasUnmatchedQuotes == true || !(self.tracked?.recognizedRectangles.isEmpty ?? true) {
+                self.needsRescan = true
+            }
             self.requestRefresh()
         }
     }
@@ -93,62 +112,74 @@ final class HighlightOverlays {
         refreshRunning = true
         Task {
             defer { refreshRunning = false }
-            while needsRefresh || needsRescan || pendingCapture != nil {
+            while needsRefresh || needsRescan {
                 needsRefresh = false
                 let rescan = needsRescan
                 needsRescan = false
                 let captured = pendingCapture
                 pendingCapture = nil
+                let checkPage = needsPageCheck || rescan || tracked == nil || captured != nil
+                needsPageCheck = false
                 let revision = generation
                 let viewport = viewportRevision
-                guard let model, !model.library.highlights.isEmpty else {
-                    tracked = nil
-                    window.orderOut(nil)
-                    continue
-                }
+                guard let model else { return }
                 do {
-                    if let captured {
-                        let candidate = try await makeTracking(captured, model: model)
-                        guard revision == generation else { needsRefresh = true; continue }
-                        tracked = candidate
-                        recognizedIsCurrent = false
-                        if !(tracked?.recognizedRectangles.isEmpty ?? true) { needsRescan = true }
-                    } else if rescan || tracked == nil {
+                    if checkPage {
                         let pinned = try model.capture.currentTarget()
-                        let target = try await model.capture.resolve(target: pinned)
-                        guard revision == generation else { needsRefresh = true; continue }
-                        let key = SourceIdentity.documentID(bundleID: target.bundleID, title: target.title, url: target.url)
-                        guard model.library.highlights.contains(where: { $0.documentID == key }) else {
+                        if model.library.highlights.isEmpty, !model.capture.isChromiumBrowser(pinned.bundleID) {
+                            browserOwnsPage = false
                             tracked = nil
                             window.orderOut(nil)
                             continue
                         }
-                        let result = try await model.capture.capture(target: target, attachmentDirectory: model.attachments, persistImage: false)
-                        let candidate = try await makeTracking(result, model: model)
-                        guard revision == generation else { needsRefresh = true; continue }
-                        tracked = candidate
-                        recognizedIsCurrent = viewport == viewportRevision
-                        if !recognizedIsCurrent, !candidate.recognizedRectangles.isEmpty { scheduleSettledRefresh() }
+                        let target = try await model.capture.resolve(target: pinned)
+                        guard generation == revision else { continue }
+                        if !target.hasSameDocument(as: tracked?.target) {
+                            tracked = nil
+                            window.orderOut(nil)
+                        }
+                        let key = SourceIdentity.documentID(bundleID: target.bundleID, title: target.title, url: target.url)
+                        let quotes = model.library.highlights.filter { $0.documentID == key }.map(\.quote)
+                        let ownsPage = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes)
+                        guard generation == revision else { continue }
+                        browserOwnsPage = ownsPage
+                        if ownsPage || quotes.isEmpty {
+                            tracked = nil
+                            window.orderOut(nil)
+                            continue
+                        }
+                        if let captured, target.hasSameDocument(as: captured.target), captured.target.frame == target.frame {
+                            let candidate = try await model.capture.trackHighlights(in: captured, quotes: quotes)
+                            guard generation == revision else { continue }
+                            tracked = candidate
+                            recognizedIsCurrent = false
+                            if !candidate.recognizedRectangles.isEmpty { needsRescan = true }
+                        } else if rescan || !target.hasSameDocument(as: tracked?.target) {
+                            let result = try await model.capture.capture(target: target, attachmentDirectory: model.attachments,
+                                                                         persistImage: false, askForAutomation: false)
+                            guard generation == revision else { continue }
+                            let candidate = try await model.capture.trackHighlights(in: result, quotes: quotes)
+                            guard generation == revision else { continue }
+                            tracked = candidate
+                            recognizedIsCurrent = viewport == viewportRevision
+                            if !recognizedIsCurrent, !candidate.recognizedRectangles.isEmpty { scheduleSettledRefresh() }
+                        }
                     }
-                    guard revision == generation, let tracked else { needsRefresh = true; continue }
+                    guard let tracked else { continue }
                     let includesRecognized = recognizedIsCurrent && !tracked.recognizedRectangles.isEmpty
                     let frame = try await model.capture.highlightFrame(tracked, includeRecognized: includesRecognized)
-                    guard revision == generation else { needsRefresh = true; continue }
+                    guard generation == revision else { continue }
                     if includesRecognized, viewport != viewportRevision { needsRefresh = true; continue }
                     show(frame)
                 } catch {
+                    guard generation == revision else { continue }
                     let hadTracking = tracked != nil
                     tracked = nil
                     window.orderOut(nil)
-                    if hadTracking, captured != nil || !rescan { needsRescan = true }
+                    if !rescan, hadTracking || error as? WindowCaptureError == .sourceChanged { needsRescan = true }
                 }
             }
         }
-    }
-
-    private func makeTracking(_ captured: CapturedWindow, model: AppModel) async throws -> TrackedHighlights {
-        let quotes = model.library.highlights.filter { $0.documentID == captured.context.documentID }.map(\.quote)
-        return try await model.capture.trackHighlights(in: captured, quotes: quotes)
     }
 
     private func show(_ frame: HighlightFrame) {
@@ -167,6 +198,13 @@ final class HighlightOverlays {
             NSRect(x: rect.minX - source.minX, y: source.maxY - rect.maxY, width: rect.width, height: rect.height)
         }
         if !window.isVisible { window.orderFrontRegardless() }
+    }
+}
+
+private extension WindowTarget {
+    func hasSameDocument(as other: WindowTarget?) -> Bool {
+        guard let other, pid == other.pid, windowID == other.windowID else { return false }
+        return url == other.url && (url != nil || title == other.title)
     }
 }
 

@@ -7,7 +7,8 @@ let package = Package(
     products: [.executable(name: "Margin", targets: ["Margin"])],
     targets: [
         .target(name: "MarginCore", linkerSettings: [.linkedLibrary("sqlite3")]),
-        .executableTarget(name: "Margin", dependencies: ["MarginCore"]),
+        .executableTarget(name: "Margin", dependencies: ["MarginCore"],
+                          resources: [.copy("Resources/BrowserHighlights.js")]),
         .testTarget(name: "MarginCoreTests", dependencies: ["MarginCore"]),
     ],
     swiftLanguageModes: [.v5]

@@ -138,16 +138,104 @@ final class WindowCapture {
     }
 
     func resolve(target: WindowTarget) async throws -> WindowTarget {
-        try await readSource(target).target
+        // Margin can be frontmost while its last source window navigates to a different page.
+        try await queued { try self.validatedSource(target, matchDocument: false).target }
     }
 
-    private func readSource(_ target: WindowTarget, includeContent: Bool = false) async throws -> SourceSnapshot {
-        let pinned = includeContent && !target.identityResolved ? try await readSource(target).target : target
+    private nonisolated static let highlightLog = Logger(subsystem: "com.jackboylan.margin", category: "BrowserHighlights")
+
+    private nonisolated static let browserHighlightScript: String? = {
+        let bundle: Bundle?
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            bundle = Bundle.main.url(forResource: "Margin_Margin", withExtension: "bundle").flatMap(Bundle.init(url:))
+        } else {
+            bundle = Bundle.module
+        }
+        guard let file = bundle?.url(forResource: "BrowserHighlights", withExtension: "js") else { return nil }
+        return try? String(contentsOf: file, encoding: .utf8)
+    }()
+
+    func paintBrowserHighlights(target: WindowTarget, quotes: [String]) async throws -> Bool {
+        guard isChromiumBrowser(target.bundleID), let url = target.url else { return false }
+        return try await queued {
+            guard let template = Self.browserHighlightScript,
+                  let json = try? JSONSerialization.data(withJSONObject: ["url": url, "quotes": quotes]),
+                  let request = String(data: json, encoding: .utf8),
+                  self.singleBrowser(target.bundleID, pid: target.pid) else { return false }
+            guard self.automationAllowed(target.bundleID, ask: false) else {
+                Self.highlightLog.info("Browser painting requires Automation permission")
+                return false
+            }
+            let javascript = template.replacingOccurrences(of: "__MARGIN_REQUEST__", with: request)
+            func checkWindow() throws {
+                guard let front = self.frontWindow(pid: target.pid), front.id == target.windowID,
+                      front.frame == target.frame else { throw WindowCaptureError.sourceChanged }
+            }
+            try checkWindow()
+            let frame = target.frame
+            let coordinates = [frame.minX, frame.minY, frame.maxX, frame.maxY].map { String(Double($0)) }
+            let script = NSAppleScript(source: """
+                on paint(jsSource, expectedURL)
+                    with timeout of 2 seconds
+                        tell application id "\(target.bundleID)"
+                            set win to front window
+                            set pageTab to active tab of win
+                            set winBounds to bounds of win
+                            set expectedBounds to {\(coordinates.joined(separator: ", "))}
+                            repeat with i from 1 to 4
+                                set delta to (item i of winBounds) - (item i of expectedBounds)
+                                if delta ≥ 3 or delta ≤ -3 then return "changed"
+                            end repeat
+                            considering case
+                                if URL of pageTab is not expectedURL then return "changed"
+                            end considering
+                            set answer to execute pageTab javascript jsSource
+                            if id of front window is not id of win or bounds of front window is not winBounds then return "changed"
+                            if id of active tab of front window is not id of pageTab then return "changed"
+                            considering case
+                                if URL of pageTab is not expectedURL then return "changed"
+                            end considering
+                            return answer
+                        end tell
+                    end timeout
+                end paint
+                """)
+            // Pass the page script and URL as data. Saved quotes can contain arbitrary AppleScript syntax.
+            let event = NSAppleEventDescriptor(eventClass: AEEventClass(kASAppleScriptSuite),
+                                               eventID: AEEventID(kASSubroutineEvent), targetDescriptor: nil,
+                                               returnID: AEReturnID(kAutoGenerateReturnID),
+                                               transactionID: AETransactionID(kAnyTransactionID))
+            event.setParam(NSAppleEventDescriptor(string: "paint"), forKeyword: AEKeyword(keyASSubroutineName))
+            let arguments = NSAppleEventDescriptor.list()
+            arguments.insert(NSAppleEventDescriptor(string: javascript), at: 1)
+            arguments.insert(NSAppleEventDescriptor(string: url), at: 2)
+            event.setParam(arguments, forKeyword: AEKeyword(keyDirectObject))
+            var error: NSDictionary?
+            let reply = script?.executeAppleEvent(event, error: &error)
+            try checkWindow()
+            guard self.singleBrowser(target.bundleID, pid: target.pid) else { throw WindowCaptureError.sourceChanged }
+            guard error == nil, let value = reply?.stringValue else {
+                let code = (error?[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
+                Self.highlightLog.info("Browser painting unavailable; AppleScript error \(code)")
+                return false
+            }
+            if value == "changed" { throw WindowCaptureError.sourceChanged }
+            struct Result: Decodable { let status: String; let matched: Int }
+            guard let result = try? JSONDecoder().decode(Result.self, from: Data(value.utf8)) else { return false }
+            if result.status == "changed" { throw WindowCaptureError.sourceChanged }
+            Self.highlightLog.info("Browser paint \(result.status, privacy: .public); matched \(result.matched) of \(quotes.count) quotes")
+            return result.status == "owned"
+        }
+    }
+
+    private func readSource(_ target: WindowTarget, includeContent: Bool = false,
+                            askForAutomation: Bool) async throws -> SourceSnapshot {
+        let pinned = includeContent && !target.identityResolved ? try await readSource(target, askForAutomation: askForAutomation).target : target
         let deadline = Date().addingTimeInterval(3)
         while true {
             do {
                 return try await queued {
-                    try self.validatedSource(pinned, includeContent: includeContent)
+                    try self.validatedSource(pinned, includeContent: includeContent, askForAutomation: askForAutomation)
                 }
             } catch WindowCaptureError.selectionLoading {
                 guard Date() < deadline else { throw WindowCaptureError.selectionLoading }
@@ -176,14 +264,15 @@ final class WindowCapture {
     }
 
     func capture(target: WindowTarget, attachmentDirectory: URL,
-                 persistImage: Bool = true) async throws -> CapturedWindow {
+                 persistImage: Bool = true, askForAutomation: Bool = true) async throws -> CapturedWindow {
         try await capture(target: target, attachmentDirectory: attachmentDirectory,
-                          persistImage: persistImage, reusing: nil)
+                          persistImage: persistImage, reusing: nil, askForAutomation: askForAutomation)
     }
 
     private func capture(target: WindowTarget, attachmentDirectory: URL,
-                         persistImage: Bool, reusing previous: CapturedWindow?) async throws -> CapturedWindow {
-        let source = try await readSource(target, includeContent: true)
+                         persistImage: Bool, reusing previous: CapturedWindow?,
+                         askForAutomation: Bool) async throws -> CapturedWindow {
+        let source = try await readSource(target, includeContent: true, askForAutomation: askForAutomation)
         let nativeText = source.accessibility.hasVisibleCoverage
             ? source.accessibility.visibleText : ""
         var warnings: [String] = []
@@ -250,7 +339,8 @@ final class WindowCapture {
         }
 
         // Navigation during capture must not combine text from one page with another page’s image.
-        let finalSource = try await readSource(source.target, includeContent: image != nil && !nativeText.isEmpty)
+        let finalSource = try await readSource(source.target, includeContent: image != nil && !nativeText.isEmpty,
+                                             askForAutomation: askForAutomation)
         if image != nil, !nativeText.isEmpty,
            !finalSource.accessibility.hasVisibleCoverage ||
             finalSource.accessibility.visibleText != nativeText {
@@ -274,7 +364,9 @@ final class WindowCapture {
             url: pinned.url, text: text, selection: source.accessibility.selection,
             capturedAt: Date(), screenshotPath: screenshotPath
         )
-        lastTarget = pinned
+        if lastTarget?.pid == pinned.pid, lastTarget?.windowID == pinned.windowID {
+            lastTarget = pinned
+        }
         return CapturedWindow(context: context, target: pinned, accessibleLines: source.accessibility.lines,
                               ocrLines: lines, warnings: warnings, image: image, textAnchors: source.accessibility.anchors)
     }
@@ -282,7 +374,7 @@ final class WindowCapture {
     func refresh(_ captured: CapturedWindow, attachmentDirectory: URL,
                  persistImage: Bool = false) async throws -> CapturedWindow {
         try await capture(target: captured.target, attachmentDirectory: attachmentDirectory,
-                          persistImage: persistImage, reusing: captured)
+                          persistImage: persistImage, reusing: captured, askForAutomation: true)
     }
 
     func trackHighlights(in captured: CapturedWindow, quotes: [String]) async throws -> TrackedHighlights {
@@ -417,18 +509,21 @@ final class WindowCapture {
         return nil
     }
 
-    private nonisolated func validatedSource(_ target: WindowTarget, includeContent: Bool = false) throws -> SourceSnapshot {
+    private nonisolated func validatedSource(_ target: WindowTarget, includeContent: Bool = false,
+                                             askForAutomation: Bool = false, matchDocument: Bool = true) throws -> SourceSnapshot {
         guard let app = NSRunningApplication(processIdentifier: target.pid), !app.isTerminated,
               (app.bundleIdentifier ?? "pid:\(target.pid)") == target.bundleID,
               let window = frontWindow(pid: target.pid), window.id == target.windowID else {
             throw WindowCaptureError.sourceChanged
         }
-        let source = try sourceSnapshot(window: window, app: app, includeContent: includeContent)
-        if let url = target.url {
-            guard source.target.url == url else { throw WindowCaptureError.sourceChanged }
-        } else {
-            let title = target.identityResolved ? source.target.title : window.title
-            guard title == target.title else { throw WindowCaptureError.sourceChanged }
+        let source = try sourceSnapshot(window: window, app: app, includeContent: includeContent, askForAutomation: askForAutomation)
+        if matchDocument {
+            if let url = target.url {
+                guard source.target.url == url else { throw WindowCaptureError.sourceChanged }
+            } else {
+                let title = target.identityResolved ? source.target.title : window.title
+                guard title == target.title else { throw WindowCaptureError.sourceChanged }
+            }
         }
         if isBrowser(target.bundleID), source.target.url == nil {
             throw WindowCaptureError.browserURLUnavailable
@@ -437,7 +532,24 @@ final class WindowCapture {
     }
 
     private nonisolated func sourceSnapshot(window: WindowRecord, app: NSRunningApplication,
-                                includeContent: Bool = false) throws -> SourceSnapshot {
+                                includeContent: Bool, askForAutomation: Bool) throws -> SourceSnapshot {
+        let bundleID = app.bundleIdentifier ?? "pid:\(app.processIdentifier)"
+        func snapshot(title: String, content: AccessibleContent) -> SourceSnapshot {
+            SourceSnapshot(target: WindowTarget(pid: app.processIdentifier, windowID: window.id,
+                                                appName: app.localizedName ?? bundleID, bundleID: bundleID,
+                                                title: title.isEmpty ? (app.localizedName ?? "Untitled window") : title,
+                                                url: content.url, frame: window.frame, identityResolved: true),
+                           accessibility: content)
+        }
+        if includeContent, askForAutomation, isChromiumBrowser(bundleID) {
+            _ = automationAllowed(bundleID, ask: true)
+        }
+        // Restoring a Chrome page needs only its URL, even when its AX tree is large or unavailable.
+        let readTabFirst = !includeContent && !askForAutomation && isChromiumBrowser(bundleID)
+        if readTabFirst, let url = browserURL(bundleID: bundleID, pid: app.processIdentifier,
+                                              window: window, askForAutomation: false) {
+            return snapshot(title: window.title, content: AccessibleContent(url: url))
+        }
         let application = AXUIElementCreateApplication(app.processIdentifier)
         if accessibilityPermission, isChromiumBrowser(app.bundleIdentifier ?? "") {
             // Reading the role asks Chromium to enable its page accessibility tree.
@@ -466,7 +578,6 @@ final class WindowCapture {
         let focusedWindow = accessibilityPermission ? element(application, kAXFocusedWindowAttribute) : nil
         let matchingWindow = focusedWindow.flatMap { matches($0, frame: window.frame) ? $0 : nil }
         let title = matchingWindow.flatMap { string($0, kAXTitleAttribute) } ?? window.title
-        let bundleID = app.bundleIdentifier ?? "pid:\(app.processIdentifier)"
         var content = AccessibleContent()
         content.url = matchingWindow.flatMap { documentURL($0) }
         if isBrowser(bundleID), content.url == nil, let matchingWindow {
@@ -474,8 +585,9 @@ final class WindowCapture {
                                             frame: window.frame, captureLineBounds: false,
                                             includeContent: false).url
         }
-        if isBrowser(bundleID), content.url == nil {
-            content.url = browserURL(bundleID: bundleID, pid: app.processIdentifier, window: window)
+        if isBrowser(bundleID), content.url == nil, !readTabFirst {
+            content.url = browserURL(bundleID: bundleID, pid: app.processIdentifier, window: window,
+                                     askForAutomation: askForAutomation)
         }
         if let matchingWindow, includeContent || content.url == nil {
             let accessible = accessibleContent(window: matchingWindow, application: application,
@@ -489,13 +601,7 @@ final class WindowCapture {
             content.hasVisibleCoverage = accessible.hasVisibleCoverage
             content.unpositionedText = accessible.unpositionedText
         }
-        return SourceSnapshot(
-            target: WindowTarget(pid: app.processIdentifier, windowID: window.id,
-                                 appName: app.localizedName ?? bundleID, bundleID: bundleID,
-                                 title: title.isEmpty ? (app.localizedName ?? "Untitled window") : title,
-                                 url: content.url, frame: window.frame, identityResolved: true),
-            accessibility: content
-        )
+        return snapshot(title: title, content: content)
     }
 
     private nonisolated func accessibleContent(window: AXUIElement, application: AXUIElement,
@@ -690,13 +796,23 @@ final class WindowCapture {
              "company.thebrowser.Browser", "org.mozilla.firefox"].contains(bundleID)
     }
 
-    private nonisolated func isChromiumBrowser(_ bundleID: String) -> Bool {
+    nonisolated func isChromiumBrowser(_ bundleID: String) -> Bool {
         ["com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev",
          "com.google.Chrome.canary", "org.chromium.Chromium", "com.microsoft.edgemac",
          "com.brave.Browser"].contains(bundleID)
     }
 
-    private nonisolated func browserURL(bundleID: String, pid: pid_t, window: WindowRecord) -> String? {
+    private nonisolated func singleBrowser(_ bundleID: String, pid: pid_t) -> Bool {
+        let instances = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+        return instances.count == 1 && instances[0].processIdentifier == pid
+    }
+
+    private nonisolated func automationAllowed(_ bundleID: String, ask: Bool) -> Bool {
+        let address = NSAppleEventDescriptor(bundleIdentifier: bundleID)
+        return AEDeterminePermissionToAutomateTarget(address.aeDesc, typeWildCard, typeWildCard, ask) == noErr
+    }
+
+    private nonisolated func browserURL(bundleID: String, pid: pid_t, window: WindowRecord, askForAutomation: Bool) -> String? {
         let property: String
         switch bundleID {
         case "com.apple.Safari", "com.apple.SafariTechnologyPreview":
@@ -707,18 +823,12 @@ final class WindowCapture {
             return nil
         }
         // Bundle targeting is unambiguous only when one instance of this browser is running.
-        let instances = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-        guard instances.count == 1, instances[0].processIdentifier == pid,
-              frontWindow(pid: pid)?.id == window.id else { return nil }
-        // Permission dialogs must not expire with the short browser-read timeout.
-        let address = NSAppleEventDescriptor(bundleIdentifier: bundleID)
-        guard AEDeterminePermissionToAutomateTarget(address.aeDesc, typeWildCard, typeWildCard, true) == noErr else {
-            return nil
-        }
+        guard singleBrowser(bundleID, pid: pid), frontWindow(pid: pid)?.id == window.id,
+              automationAllowed(bundleID, ask: askForAutomation) else { return nil }
         let source = "with timeout of 2 seconds\n tell application id \"\(bundleID)\" to return {\(property), bounds of front window}\nend timeout"
         var error: NSDictionary?
         let response = NSAppleScript(source: source)?.executeAndReturnError(&error)
-        guard error == nil, frontWindow(pid: pid)?.id == window.id,
+        guard error == nil, singleBrowser(bundleID, pid: pid), frontWindow(pid: pid)?.id == window.id,
               let value = response?.atIndex(1)?.stringValue,
               let bounds = response?.atIndex(2), bounds.numberOfItems == 4,
               URL(string: value)?.scheme != nil else { return nil }
