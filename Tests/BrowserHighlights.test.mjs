@@ -119,9 +119,34 @@ test('live changes keep exact visible text and remove stale or ambiguous ranges'
     document.body.replaceWith(body);
   });
   await settle(page);
-  assert.equal((await install(page, ['lead finish'])).matched, 1);
+  assert.equal(await page.evaluate(() => [...CSS.highlights.get('margin-saved-passages')][0]?.startContainer.isConnected), true);
+  assert.equal((await install(page, ['lead finish', 'not present'])).matched, 1);
   assert.equal(await page.evaluate(() => [...CSS.highlights.get('margin-saved-passages')][0].toString()), 'leadfinish');
   await install(page, []);
   assert.equal(await page.evaluate(() => CSS.highlights.has('margin-saved-passages') ||
     !!window[Symbol.for('com.jackboylan.margin.highlights')]), false);
+});
+
+
+test('normalization boundaries and CSS visibility cannot paint a different passage', async t => {
+  const page = await setup(t);
+  await page.evaluate(() => {
+    document.body.innerHTML = '<style>[data-state="closed"]{display:none}@media(max-width:500px){#responsive{display:block}}@media(min-width:501px){#responsive{display:none}}</style>' +
+      '<p>Use ⅓ cup of water.</p><p>A<span style="visibility:hidden"><span style="visibility:visible">WRONG</span></span>B</p>' +
+      '<p>An essay on ΟΣΑ and other words</p>' +
+      '<p>A unique visible passage</p><details><summary>Closed</summary><p>A unique visible passage</p></details>' +
+      '<p>A changing duplicate</p><p id="duplicate" data-state="closed">A changing duplicate</p>' +
+      '<p>A responsive duplicate</p><p id="responsive">A responsive duplicate</p>';
+  });
+  assert.equal((await install(page, ['3 cup of water', 'AB'])).matched, 0);
+  assert.equal((await install(page, ['⅓ cup of water', 'essay on ΟΣ', 'A unique visible passage'])).matched, 3);
+  assert.deepEqual(await page.evaluate(() => [...CSS.highlights.get('margin-saved-passages')].map(r=>r.toString())), ['⅓ cup of water', 'essay on ΟΣ', 'A unique visible passage']);
+  assert.equal((await install(page, ['A changing duplicate'])).matched, 1);
+  await page.evaluate(() => document.querySelector('#duplicate').dataset.state = 'open');
+  await settle(page);
+  assert.equal(await page.evaluate(() => CSS.highlights.get('margin-saved-passages').size), 0);
+  assert.equal((await install(page, ['A responsive duplicate'])).matched, 1);
+  await page.setViewportSize({width:450,height:500});
+  await settle(page);
+  assert.equal(await page.evaluate(() => CSS.highlights.get('margin-saved-passages').size), 0);
 });

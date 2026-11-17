@@ -13,7 +13,7 @@
 
   const normalizeText = (value) => value.normalize("NFKC").replace(/\u00ad/g, "")
     .replace(/[\u2010\u2011]/g, "-").replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
-    .replace(/\s+/gu, " ").toLowerCase();
+    .replace(/\s+/gu, " ").toUpperCase();
   const normalize = value => normalizeText(value).trim();
   const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
   const highlight = new Highlight();
@@ -23,10 +23,8 @@
   CSS.highlights.set(name, highlight);
   let url = location.href;
   let quotes = [];
-  let signature = "";
   let anchors = [];
   let scheduled = 0;
-  let dirty = true;
 
   // Normalize complete text runs so combining characters can cross inline markup.
   function indexText() {
@@ -55,9 +53,14 @@
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (node.nodeType === Node.ELEMENT_NODE) {
-          if (node.matches("script,style,noscript,textarea,input,select,template,[hidden]")) return NodeFilter.FILTER_REJECT;
+          if (node.matches("script,style,noscript,textarea,input,select,template")) return NodeFilter.FILTER_REJECT;
           const style = getComputedStyle(node);
-          if (style.display === "none" || style.visibility === "hidden") return NodeFilter.FILTER_REJECT;
+          if (style.display === "none") return NodeFilter.FILTER_REJECT;
+        } else {
+          let box = node.parentElement;
+          if (getComputedStyle(box).visibility !== "visible") return NodeFilter.FILTER_REJECT;
+          while (box && getComputedStyle(box).display === "contents") box = box.parentElement;
+          if (!box?.checkVisibility({ opacityProperty: true })) return NodeFilter.FILTER_REJECT;
         }
         return NodeFilter.FILTER_ACCEPT;
       }
@@ -93,7 +96,9 @@
       if (normalizeText(outside).length <= omitted) low = middle;
       else high = middle - 1;
     }
-    return boundaries[fromStart ? low : boundaries.length - 1 - low];
+    const at = boundaries[fromStart ? low : boundaries.length - 1 - low];
+    const outside = fromStart ? raw.slice(0, at) : raw.slice(at);
+    return normalizeText(outside).length === omitted ? at : null;
   }
 
   function paint() {
@@ -101,8 +106,6 @@
     scheduled = 0;
     if (location.href !== url) { highlight.clear(); anchors = []; return; }
     if (!quotes.length) { highlight.clear(); anchors = []; return; }
-    if (!dirty) return;
-    dirty = false;
     const index = indexText();
     const next = [];
     for (const quote of quotes) {
@@ -114,6 +117,7 @@
       if (!first || !last) continue;
       const from = offset(first, start - first.start + first.skipped, true);
       const to = offset(last, end - last.start + last.skipped, false);
+      if (from === null || to === null) continue;
       const startNode = first.nodes.find(item => item.start <= from && from < item.end);
       const endNode = last.nodes.find(item => item.start < to && to <= item.end);
       if (!startNode || !endNode) continue;
@@ -134,18 +138,18 @@
   }
 
   function schedule() {
-    dirty = true;
     if (!scheduled) scheduled = setTimeout(paint, 80);
   }
   const observer = new MutationObserver(schedule);
   observer.observe(document.documentElement, {
     childList: true, characterData: true, subtree: true,
-    attributes: true, attributeFilter: ["hidden", "class", "style"]
+    attributes: true
   });
   window.navigation?.addEventListener("currententrychange", schedule);
   window.addEventListener("popstate", schedule);
   window.addEventListener("hashchange", schedule);
   window.addEventListener("pageshow", schedule);
+  window.addEventListener("resize", schedule);
 
   const state = {
     version,
@@ -153,13 +157,9 @@
       if (new URL(next.url).href !== location.href) return reply("changed");
       const nextQuotes = [...new Set(next.quotes.map(normalize).filter(Boolean))];
       if (!nextQuotes.length) { state.dispose(); return reply("owned"); }
-      const nextSignature = JSON.stringify(nextQuotes);
-      if (url !== location.href || signature !== nextSignature) {
-        url = location.href;
-        quotes = nextQuotes;
-        signature = nextSignature;
-        dirty = true;
-      }
+      url = location.href;
+      quotes = nextQuotes;
+      // Stylesheet rules can change visibility without a DOM mutation.
       paint();
       return reply("owned", anchors.length);
     },
@@ -170,6 +170,7 @@
       window.removeEventListener("popstate", schedule);
       window.removeEventListener("hashchange", schedule);
       window.removeEventListener("pageshow", schedule);
+      window.removeEventListener("resize", schedule);
       if (CSS.highlights.get(name) === highlight) CSS.highlights.delete(name);
       document.adoptedStyleSheets = document.adoptedStyleSheets.filter(item => item !== sheet);
       delete window[key];
