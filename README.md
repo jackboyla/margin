@@ -31,7 +31,7 @@ Ad-hoc beta builds are not notarized by Apple, and Gatekeeper may block them. If
 - You can type and press **Ask** while page context loads; Margin waits for the verified source before contacting the model.
 - Select more text in the source window and return to the box to include that passage. The source page stays pinned; changing pages requires capturing the new page.
 - The **highlighter** button saves the selected passage without contacting the agent.
-- **Control–Shift–H** opens the sidebar: search recent conversations, view this page's threads and highlights, or open Settings.
+- **Control–Shift–H** opens the sidebar: search recent conversations, view this page's threads, browse saved highlights from any page, or open Settings.
 - **Ask about this** starts a conversation from a saved highlight. Open a thread in the sidebar to continue it. Codex and Claude Code threads keep their own agent session; API threads retain their conversation history. Click a thread’s source link to reopen its page.
 - Click the **model name** below the question field to choose a model for this conversation. **Use as default** saves it for new threads; configure the provider and key in **Settings → Models**.
 - **Escape** closes the panel. **Stop** interrupts the agent request.

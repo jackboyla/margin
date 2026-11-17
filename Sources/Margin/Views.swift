@@ -248,16 +248,22 @@ struct SidebarView: View {
                 }.pickerStyle(.segmented)
                 TextField("Search your library", text: $search)
                     .textFieldStyle(.roundedBorder)
-                if filter != 0 {
+                if filter == 1 {
                     Text(model.pageContext?.title ?? "Capture a window with Control–Shift–Space first.")
                         .font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 8) {
                         if filter == 2 {
-                            ForEach(model.currentHighlights.filter { search.isEmpty || $0.quote.localizedCaseInsensitiveContains(search) }) { highlight in
+                            let highlights = model.library.highlights.sorted { $0.createdAt > $1.createdAt }
+                                .filter { search.isEmpty || $0.quote.localizedCaseInsensitiveContains(search) }
+                            ForEach(highlights) { highlight in
                                 VStack(alignment: .leading, spacing: 7) {
                                     Text(highlight.quote).font(.callout).lineLimit(5).textSelection(.enabled)
+                                    if let document = model.library.documents.first(where: { $0.id == highlight.documentID }) {
+                                        Text(document.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                        SourceLink(value: document.url)
+                                    }
                                     HStack {
                                         Button("Ask about this", systemImage: "text.bubble") { model.useHighlight(highlight) }.disabled(model.preparingQuestion)
                                         Spacer()
@@ -266,7 +272,7 @@ struct SidebarView: View {
                                     }.buttonStyle(.plain).font(.caption)
                                 }.padding(13).background(.yellow.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
                             }
-                            if model.currentHighlights.isEmpty { empty("No saved highlights for this page.") }
+                            if highlights.isEmpty { empty("No matching saved highlights.") }
                         } else {
                             let threads = filter == 0 ? model.recentThreads : model.currentThreads
                             ForEach(threads.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.messages.contains { $0.body.localizedCaseInsensitiveContains(search) } }) { thread in

@@ -66,9 +66,6 @@ final class AppModel: ObservableObject {
     }
 
     var selectedThread: ThreadRecord? { library.threads.first { $0.id == selectedThreadID } }
-    var currentHighlights: [Highlight] {
-        library.highlights.filter { $0.documentID == pageContext?.documentID }.sorted { $0.createdAt > $1.createdAt }
-    }
     var recentThreads: [ThreadRecord] { library.threads.sorted { $0.updatedAt > $1.updatedAt } }
     var currentThreads: [ThreadRecord] { recentThreads.filter { $0.documentID == pageContext?.documentID } }
     var activeAgent: AgentConfiguration { composerConfiguration }
