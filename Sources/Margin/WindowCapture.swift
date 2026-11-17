@@ -39,6 +39,7 @@ enum WindowCaptureError: LocalizedError {
     case browserURLUnavailable
     case noReadableContent
     case selectionLoading
+    case selectionAccessDenied
 
     var errorDescription: String? {
         switch self {
@@ -50,6 +51,8 @@ enum WindowCaptureError: LocalizedError {
             return "Margin could not read this page’s URL. Allow \(WindowCapture.accessibilityPermissionName) and browser Automation access in System Settings, then try again."
         case .selectionLoading:
             return "This document’s text selection is still loading. Wait a moment, then try again."
+        case .selectionAccessDenied:
+            return "Enable \(WindowCapture.accessibilityPermissionName) for Margin in System Settings → Privacy & Security to read selected text."
         case .noReadableContent:
             return "Margin could not read this window. Allow \(WindowCapture.accessibilityPermissionName) or Screen Recording access in System Settings, then try again."
         }
@@ -68,6 +71,10 @@ final class WindowCapture {
 
     nonisolated var accessibilityPermission: Bool { AXIsProcessTrusted() }
     nonisolated var screenCapturePermission: Bool { CGPreflightScreenCaptureAccess() }
+
+    func requireSelectionAccess() throws {
+        guard accessibilityPermission else { throw WindowCaptureError.selectionAccessDenied }
+    }
 
     @discardableResult
     func requestAccessibilityPermission() -> Bool {

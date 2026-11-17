@@ -215,6 +215,7 @@ final class AppModel: ObservableObject {
             do {
                 await captureTask?.value
                 if let capturedWindow {
+                    try capture.requireSelectionAccess()
                     accept(try await capture.refresh(capturedWindow, attachmentDirectory: attachments, persistImage: false))
                 }
                 guard let source = context else {
@@ -230,6 +231,7 @@ final class AppModel: ObservableObject {
     }
 
     func saveHighlightedSelection() async throws {
+        try capture.requireSelectionAccess()
         let pinned = try capture.currentTarget()
         let result = try await capture.capture(target: pinned, attachmentDirectory: attachments, persistImage: false)
         try await persistHighlight(result.context)
@@ -239,8 +241,9 @@ final class AppModel: ObservableObject {
 
     private func persistHighlight(_ source: SourceContext) async throws {
         guard let quote = source.selection?.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty else {
+            try capture.requireSelectionAccess()
             throw NSError(domain: "Margin", code: 1,
-                          userInfo: [NSLocalizedDescriptionKey: "Select some text before saving a highlight."])
+                          userInfo: [NSLocalizedDescriptionKey: "Margin couldn’t read selected text. Select a passage in the source window and try again."])
         }
         try await update { library in
             Self.upsert(source, in: &library)
