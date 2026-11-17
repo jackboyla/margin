@@ -6,11 +6,17 @@ Click the model below the question field to change it for this conversation, inc
 
 ## Codex
 
-Install and sign in to [Codex CLI](https://github.com/openai/codex), then select its executable and a working folder. Margin starts Codex with read-only tools and keeps a separate agent session for each thread. Enter a model name to override Codex’s choice; leave it empty to let Codex manage the model. Available window images accompany captured text. Codex manages its own sign-in and session files.
+Install and sign in to [Codex CLI](https://github.com/openai/codex), then select its executable and a working folder. Margin starts Codex with read-only tools and keeps a separate agent session for each thread. The model menu reads Codex’s local model cache; run Codex once and refresh if the list is missing or stale. You can also enter a custom model name, or let Codex choose. Available window images accompany captured text. Codex manages its own sign-in and session files.
+
+## Claude Code
+
+Install and sign in to [Claude Code](https://code.claude.com/docs/en/overview), then choose its executable and a working folder. Pick a named model alias or enter a full model ID supported by your account. Each conversation retains its own Claude session, including after restart.
+
+Margin permits Claude’s Read, Grep, Glob, WebSearch and WebFetch tools. It disables hooks, slash commands, other tools and MCP servers for these reading sessions; these tool restrictions are not an operating-system sandbox. Available screenshots are passed as file references for the Read tool. Claude Code owns sign-in and session files.
 
 ## OpenAI-compatible APIs
 
-Choose **OpenAI-compatible API**, then a preset. Enter the exact model identifier available from that provider or local server and any required API key. Presets leave the model blank and disable image uploads.
+Choose **OpenAI-compatible API**, then a preset and any required API key. The model menu requests the server’s `/models` list. If that endpoint is unavailable, enter the exact model identifier manually. Presets leave the model blank and disable image uploads.
 
 | Preset | API base URL | Output token field |
 | --- | --- | --- |

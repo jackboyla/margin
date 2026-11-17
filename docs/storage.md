@@ -2,7 +2,7 @@
 
 Margin saves locally in `~/Library/Application Support/Margin/`. Notes remain available offline; answering questions still requires the chosen model backend. No database server setup is needed.
 
-`library.sqlite` holds document records, highlights, conversations, captured context, each thread's model settings, and Codex session identifiers. `Attachments/` holds window images. Codex keeps its runtime sessions separately in its own home directory. API keys stay in macOS Keychain.
+`library.sqlite` holds document records, highlights, conversations, captured context, each thread's model settings, and agent session identifiers. `Attachments/` holds window images. Codex and Claude Code keep their runtime sessions separately in their own home directories. API keys stay in macOS Keychain.
 
 SQLite commits library changes in transactions. After a restart, unfinished replies become interrupted and do not restart themselves. A corrupt or unsupported library produces an error without replacing its saved contents.
 
@@ -12,4 +12,4 @@ When opening a library for the first time, Margin imports `library.json` into SQ
 
 ## Backups
 
-Quit Margin, then copy the whole `~/Library/Application Support/Margin/` folder to back up the database and attachments together. SQLite may keep `library.sqlite-wal` and `library.sqlite-shm` files beside the main database; copying the database alone while the app runs can miss recent writes or produce an inconsistent backup. Keep Codex's separate session files if you need to resume its agent sessions after a restore.
+Quit Margin, then copy the whole `~/Library/Application Support/Margin/` folder to back up the database and attachments together. SQLite may keep `library.sqlite-wal` and `library.sqlite-shm` files beside the main database; copying the database alone while the app runs can miss recent writes or produce an inconsistent backup. Keep your CLI agent’s separate session files if you need to resume its agent sessions after a restore.

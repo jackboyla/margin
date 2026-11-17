@@ -6,6 +6,7 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var section = 0
     @State private var apiKey = ""
+    @State private var apiKeyAccount: String?
     @State private var refresh = false
 
     var body: some View {
@@ -47,6 +48,7 @@ struct SettingsView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     shortcut("Ask beside the cursor", keys: "⌃⇧Space")
+                    shortcut("Save selected text", keys: "⌃⇧S")
                     shortcut("Threads and highlights", keys: "⌃⇧H")
                     shortcut("Close the panel", keys: "Esc")
                 }.padding(6)
@@ -91,16 +93,20 @@ struct SettingsView: View {
             Text("Default model for new conversations").font(.headline)
             Picker("Answer with", selection: $model.agentConfiguration.backend) {
                 Text("Codex agent").tag(AgentConfiguration.Backend.codex)
+                Text("Claude Code").tag(AgentConfiguration.Backend.claude)
                 Text("OpenAI-compatible API").tag(AgentConfiguration.Backend.openAI)
             }.pickerStyle(.menu)
             if model.agentConfiguration.backend == .codex {
                 Text("Uses your existing Codex sign-in and read-only tools. Each thread keeps its own agent session.")
                     .font(.caption).foregroundStyle(.secondary)
-                TextField("Codex model (empty lets Codex choose)", text: Binding(
-                    get: { model.agentConfiguration.codexModel ?? "" },
-                    set: { model.agentConfiguration.codexModel = $0.isEmpty ? nil : $0 }))
-                    .textFieldStyle(.roundedBorder)
+                ModelNamePicker(configuration: $model.agentConfiguration)
                 field("Codex executable", text: $model.executablePath)
+                field("Working folder", text: $model.workspacePath)
+            } else if model.agentConfiguration.backend == .claude {
+                Text("Uses your existing Claude Code sign-in and a separate session for each thread.")
+                    .font(.caption).foregroundStyle(.secondary)
+                ModelNamePicker(configuration: $model.agentConfiguration)
+                field("Claude executable", text: $model.claudeExecutablePath)
                 field("Working folder", text: $model.workspacePath)
             } else {
                 Menu("Start from a provider") {
@@ -111,11 +117,12 @@ struct SettingsView: View {
                 }
                 field("API base URL", text: $model.agentConfiguration.api.baseURL)
                     .onChange(of: model.agentConfiguration.api.baseURL) { _, _ in loadAPIKey() }
-                field("Model name", text: $model.agentConfiguration.api.model)
                 VStack(alignment: .leading, spacing: 5) {
                     Text("API key").font(.caption).foregroundStyle(.secondary)
                     SecureField("Optional for local servers", text: $apiKey).textFieldStyle(.roundedBorder)
                 }
+                ModelNamePicker(configuration: $model.agentConfiguration,
+                                credential: apiKeyAccount.map { ModelCatalogCredential(account: $0, key: apiKey) })
                 Toggle("Include window images", isOn: $model.agentConfiguration.includesImages)
                 Text("Enable images only for vision models. Text-only models still receive the selected passage, visible text and saved highlights.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -135,11 +142,18 @@ struct SettingsView: View {
                             .textFieldStyle(.roundedBorder)
                     }.padding(.top, 8)
                 }
-                Text("Keys stay in macOS Keychain. API conversations use Chat Completions; coding-agent tools remain available through Codex.")
+                Text("Keys stay in macOS Keychain. API conversations use Chat Completions; coding-agent tools remain available through Codex and Claude Code.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Button("Save default model") {
-                do { try model.saveAgentSettings(apiKey: apiKey) }
+                do {
+                    if model.agentConfiguration.backend == .openAI,
+                       apiKeyAccount != (try model.apiCredentialAccount(model.agentConfiguration.api)) {
+                        loadAPIKey()
+                        return
+                    }
+                    try model.saveAgentSettings(apiKey: apiKey)
+                }
                 catch { model.error = error.localizedDescription }
             }.buttonStyle(.borderedProminent).tint(.orange)
             Text("New threads use these settings. Change a conversation’s model directly in its question box.")
@@ -166,8 +180,9 @@ struct SettingsView: View {
 
     private func loadAPIKey() {
         apiKey = ""
+        apiKeyAccount = nil
         guard let account = try? model.apiCredentialAccount(model.agentConfiguration.api) else { return }
-        do { apiKey = try Credentials.read(account) }
+        do { apiKey = try Credentials.read(account); apiKeyAccount = account }
         catch { model.error = error.localizedDescription }
     }
 

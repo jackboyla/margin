@@ -26,6 +26,9 @@ final class AppModel: ObservableObject {
     @Published var executablePath: String {
         didSet { UserDefaults.standard.set(executablePath, forKey: "agentExecutable") }
     }
+    @Published var claudeExecutablePath: String {
+        didSet { UserDefaults.standard.set(claudeExecutablePath, forKey: "claudeExecutable") }
+    }
     @Published var workspacePath: String {
         didSet { UserDefaults.standard.set(workspacePath, forKey: "agentWorkspace") }
     }
@@ -54,6 +57,8 @@ final class AppModel: ObservableObject {
         self.composerConfiguration = configuration
         self.executablePath = UserDefaults.standard.string(forKey: "agentExecutable")
             ?? CodexAgent.defaultExecutable()?.path ?? "/opt/homebrew/bin/codex"
+        self.claudeExecutablePath = UserDefaults.standard.string(forKey: "claudeExecutable")
+            ?? CodexAgent.defaultExecutable(provider: .claude)?.path ?? "/opt/homebrew/bin/claude"
         let workspace = directory.appendingPathComponent("AgentWorkspace", isDirectory: true)
         try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
@@ -215,21 +220,36 @@ final class AppModel: ObservableObject {
                 if let capturedWindow {
                     accept(try await capture.refresh(capturedWindow, attachmentDirectory: attachments, persistImage: false))
                 }
-                guard let source = context,
-                      let quote = source.selection?.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty else {
+                guard let source = context else {
                     error = "Select text in the source window, then press Control–Shift–Space to capture it."
                     return
                 }
-                try await update { library in
-                    Self.upsert(source, in: &library)
-                    if !library.highlights.contains(where: { $0.documentID == source.documentID && $0.quote == quote }) {
-                        library.highlights.append(Highlight(documentID: source.documentID, quote: quote, contextText: source.text))
-                    }
-                }
+                try await persistHighlight(source)
                 notice = "Highlight saved on this Mac."
                 error = nil
                 onLibraryChange?()
             } catch { self.error = error.localizedDescription }
+        }
+    }
+
+    func saveHighlightedSelection() async throws {
+        let pinned = try capture.currentTarget()
+        let result = try await capture.capture(target: pinned, attachmentDirectory: attachments, persistImage: false)
+        try await persistHighlight(result.context)
+        onCapture?(result)
+        onLibraryChange?()
+    }
+
+    private func persistHighlight(_ source: SourceContext) async throws {
+        guard let quote = source.selection?.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty else {
+            throw NSError(domain: "Margin", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Select some text before saving a highlight."])
+        }
+        try await update { library in
+            Self.upsert(source, in: &library)
+            if !library.highlights.contains(where: { $0.documentID == source.documentID && $0.quote == quote }) {
+                library.highlights.append(Highlight(documentID: source.documentID, quote: quote, contextText: source.text))
+            }
         }
     }
 
@@ -252,7 +272,7 @@ final class AppModel: ObservableObject {
             do {
                 await captureTask?.value
                 if let capturedWindow {
-                    let images = activeAgent.backend == .codex || activeAgent.includesImages
+                    let images = activeAgent.backend != .openAI || activeAgent.includesImages
                     accept(try await capture.refresh(capturedWindow, attachmentDirectory: attachments, persistImage: images))
                 }
                 guard let source = context else {
@@ -293,7 +313,7 @@ final class AppModel: ObservableObject {
         if draft.trimmingCharacters(in: .whitespacesAndNewlines) == question { draft = "" }
         runningThreadID = thread.id
         liveAnswer = ""
-        activity = configuration.backend == .codex ? "Starting Codex…" : "Connecting to \(configuration.api.model)…"
+        activity = configuration.backend == .openAI ? "Connecting to \(configuration.api.model)…" : "Starting \(configuration.backend == .claude ? "Claude Code" : "Codex")…"
         error = nil
         let saved = library.highlights.filter { $0.documentID == source.documentID }
         let prompt = Self.prompt(question: question, source: source, highlights: saved)
@@ -306,15 +326,17 @@ final class AppModel: ObservableObject {
             let answer: String
             do {
                 switch configuration.backend {
-                case .codex:
+                case .codex, .claude:
                     answer = try await agent.run(
                         prompt: prompt, imagePath: imagePath,
                         sessionID: thread.providerSessionID,
                         workingDirectory: URL(fileURLWithPath: workspacePath),
-                        executable: URL(fileURLWithPath: executablePath), model: configuration.codexModel.flatMap {
+                        executable: URL(fileURLWithPath: configuration.backend == .claude ? claudeExecutablePath : executablePath),
+                        model: (configuration.backend == .claude ? configuration.claudeModel : configuration.codexModel).flatMap {
                             let value = $0.trimmingCharacters(in: .whitespacesAndNewlines)
                             return value.isEmpty ? nil : value
                         },
+                        provider: configuration.backend == .claude ? .claude : .codex,
                         onSession: { [weak self] sessionID in
                             guard let self else { return }
                             do {

@@ -11,9 +11,13 @@ struct ComposerView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
-                Image(systemName: "text.bubble.fill").foregroundStyle(.orange).font(.title3)
-                Text("Margin").font(.headline)
-                Spacer()
+                ZStack(alignment: .leading) {
+                    WindowDragHandle()
+                    HStack {
+                        Image(systemName: "text.bubble.fill").foregroundStyle(.orange).font(.title3)
+                        Text("Margin").font(.headline)
+                    }.allowsHitTesting(false)
+                }.frame(maxWidth: .infinity).frame(height: 24).help("Drag to move Margin")
                 Button(action: history) { Image(systemName: "sidebar.right") }.help("Recent threads · ⌃⇧H")
                 Button(action: close) { Image(systemName: "xmark") }.help("Close · Esc")
             }.buttonStyle(.plain)
@@ -46,9 +50,7 @@ struct ConversationView: View {
                     Image(systemName: "doc.text").foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(context.title).font(.caption.weight(.medium)).lineLimit(2)
-                        if let url = context.url {
-                            Text(URL(string: url)?.host ?? url).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-                        }
+                        SourceLink(value: context.url)
                     }
                     Spacer(minLength: 4)
                     Button { model.saveHighlight() } label: { Image(systemName: "highlighter") }
@@ -189,17 +191,11 @@ struct ModelChoiceView: View {
                 Text("Model for this conversation").font(.headline)
                 Picker("Provider", selection: $model.composerConfiguration.backend) {
                     Text("Codex").tag(AgentConfiguration.Backend.codex)
+                    Text("Claude Code").tag(AgentConfiguration.Backend.claude)
                     Text("OpenAI-compatible API").tag(AgentConfiguration.Backend.openAI)
                 }.disabled(model.selectedThread != nil)
-                if model.composerConfiguration.backend == .codex {
-                    TextField("Automatic", text: Binding(
-                        get: { model.composerConfiguration.codexModel ?? "" },
-                        set: { model.composerConfiguration.codexModel = $0.isEmpty ? nil : $0 }))
-                        .textFieldStyle(.roundedBorder).accessibilityLabel("Codex model")
-                    Text("Leave empty to let Codex choose. Enter a model to override it.").font(.caption).foregroundStyle(.secondary)
-                } else {
-                    TextField("Model name", text: $model.composerConfiguration.api.model)
-                        .textFieldStyle(.roundedBorder).accessibilityLabel("API model")
+                ModelNamePicker(configuration: $model.composerConfiguration)
+                if model.composerConfiguration.backend == .openAI {
                     Text(model.composerConfiguration.api.baseURL).font(.caption).foregroundStyle(.secondary)
                         .lineLimit(2)
                     Toggle("Include window images", isOn: $model.composerConfiguration.includesImages)
@@ -274,16 +270,20 @@ struct SidebarView: View {
                         } else {
                             let threads = filter == 0 ? model.recentThreads : model.currentThreads
                             ForEach(threads.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.messages.contains { $0.body.localizedCaseInsensitiveContains(search) } }) { thread in
-                                Button { model.openThread(thread) } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text(thread.title).font(.callout.weight(.medium)).lineLimit(2)
-                                        Text(model.document(for: thread)?.title ?? "Window")
-                                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                                        Text(thread.updatedAt, style: .relative).font(.caption2).foregroundStyle(.tertiary)
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading).padding(13)
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Button { model.openThread(thread) } label: {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(thread.title).font(.callout.weight(.medium)).lineLimit(2)
+                                            Text(model.document(for: thread)?.title ?? "Window")
+                                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                                            Text(thread.updatedAt, style: .relative).font(.caption2).foregroundStyle(.tertiary)
+                                        }
+                                        .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                                    }.buttonStyle(.plain).disabled(model.preparingQuestion)
+                                    SourceLink(value: thread.messages.compactMap { $0.context?.url }.first
+                                               ?? model.document(for: thread)?.url)
+                                }.padding(13)
                                     .background(model.selectedThreadID == thread.id ? Color.orange.opacity(0.14) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 9))
-                                }.buttonStyle(.plain).disabled(model.preparingQuestion)
                             }
                             if threads.isEmpty { empty("Your conversations will appear here.") }
                         }
@@ -315,5 +315,30 @@ struct SidebarView: View {
             Text("Keep reading. Press ⌃⇧Space when something catches your attention.")
                 .font(.caption).foregroundStyle(.tertiary)
         }.padding(.vertical, 28)
+    }
+}
+
+private struct SourceLink: View {
+    let value: String?
+
+    var body: some View {
+        if let value, let url = URL(string: value),
+           ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
+           let host = url.host, !host.isEmpty, url.user == nil, url.password == nil {
+            Link(destination: url) {
+                Label(host, systemImage: "arrow.up.right.square").lineLimit(1)
+            }.font(.caption2).help("Open source: \(url.absoluteString)")
+        }
+    }
+}
+
+private struct WindowDragHandle: NSViewRepresentable {
+    func makeNSView(context: Context) -> DragView { DragView() }
+    func updateNSView(_ nsView: DragView, context: Context) {}
+
+    final class DragView: NSView {
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .openHand) }
+        override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     }
 }

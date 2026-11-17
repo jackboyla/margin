@@ -44,7 +44,7 @@ final class LibraryStoreTests: XCTestCase {
         ], providerSessionID: "session-one", agent: AgentConfiguration(codexModel: "model-one"))
         let second = ThreadRecord(documentID: source.documentID, title: "Another question", messages: [
             ChatMessage(role: .user, body: "What are the limits?", context: source),
-        ], providerSessionID: "session-two")
+        ], providerSessionID: "session-two", agent: AgentConfiguration(backend: .claude, claudeModel: "sonnet"))
         try await reopened.update { $0.threads = [first, second] }
         try await reopened.update {
             $0.threads[0].messages[1].body = "Updated explanation"
@@ -55,6 +55,7 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(final.state, reopened.state)
         XCTAssertEqual(final.state.highlights, [highlight])
         XCTAssertEqual(final.state.threads[1], second)
+        XCTAssertEqual(final.state.threads[1].agent?.claudeModel, "sonnet")
         XCTAssertEqual(final.state.threads[0].providerSessionID, "session-one")
         XCTAssertEqual(final.state.threads[0].messages[0].context, source)
         XCTAssertEqual(final.state.threads[0].agent?.codexModel, "model-two")

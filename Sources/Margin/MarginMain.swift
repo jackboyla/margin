@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var composer: FloatingPanel?
     private var sidebar: FloatingPanel?
     private var overlays: HighlightOverlays?
+    private var savingHighlight = false
+    private var toast: NSPanel?
+    private var toastTask: Task<Void, Never>?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -32,6 +35,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlays = HighlightOverlays(model: model)
             shortcuts.onComposer = { [weak self] in self?.showComposer() }
             shortcuts.onSidebar = { [weak self] in self?.toggleSidebar() }
+            shortcuts.onSaveHighlight = { [weak self] in self?.saveSelection() }
             try shortcuts.register()
             if !UserDefaults.standard.bool(forKey: "hasOpenedMargin") {
                 model.showingSettings = true
@@ -54,6 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item?.button?.image = NSImage(systemSymbolName: "text.bubble", accessibilityDescription: "Margin")
         let menu = NSMenu()
         menu.addItem(withTitle: "Ask about this window   ⌃⇧Space", action: #selector(ask), keyEquivalent: "")
+        menu.addItem(withTitle: "Save selected highlight   ⌃⇧S", action: #selector(saveSelection), keyEquivalent: "")
         menu.addItem(withTitle: "Threads and highlights   ⌃⇧H", action: #selector(history), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(settings), keyEquivalent: "")
         menu.addItem(.separator())
@@ -77,6 +82,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func settings() { model?.showingSettings = true; showSidebar(capture: false) }
     @objc private func quit() { NSApp.terminate(nil) }
 
+    @objc private func saveSelection() {
+        guard !savingHighlight, let model else { return }
+        savingHighlight = true
+        Task {
+            defer { savingHighlight = false }
+            do {
+                try await model.saveHighlightedSelection()
+                showToast("Highlight saved", success: true)
+            } catch { showToast(error.localizedDescription, success: false) }
+        }
+    }
+
+    private func showToast(_ message: String, success: Bool) {
+        toastTask?.cancel()
+        toast?.orderOut(nil)
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 300, height: 74),
+                            styleMask: [.nonactivatingPanel, .borderless], backing: .buffered, defer: false)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.level = .floating
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        panel.contentView = NSHostingView(rootView:
+            Label(message, systemImage: success ? "checkmark.circle.fill" : "exclamationmark.circle")
+                .font(.callout).padding(14).frame(width: 300, height: 74)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12)))
+        let point = NSEvent.mouseLocation
+        let visible = (NSScreen.screens.first { NSMouseInRect(point, $0.frame, false) } ?? NSScreen.main)?.visibleFrame ?? .zero
+        panel.setFrameOrigin(NSPoint(x: min(max(point.x + 14, visible.minX), visible.maxX - 300),
+                                     y: max(visible.minY, min(point.y - 86, visible.maxY - 74))))
+        toast = panel
+        panel.orderFrontRegardless()
+        toastTask = Task {
+            try? await Task.sleep(for: .seconds(success ? 2 : 4))
+            guard !Task.isCancelled else { return }
+            panel.orderOut(nil)
+            toast = nil
+        }
+    }
+
     private func prepareComposer() {
         guard composer == nil, let model else { return }
         composer = FloatingPanel()
@@ -91,8 +136,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showComposer() {
-        guard let model else { return }
-        model.beginCapture(newThread: model.selectedThreadID == nil)
+        guard let model, !model.preparingQuestion else { return }
+        model.newThread()
+        model.beginCapture(newThread: true)
         sidebar?.orderOut(nil)
         prepareComposer()
         guard let composer else { return }
@@ -143,6 +189,7 @@ final class FloatingPanel: NSPanel {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 420, height: 360),
                    styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView], backing: .buffered, defer: false)
         isFloatingPanel = true
+        isMovable = true
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         backgroundColor = .clear

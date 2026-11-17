@@ -7,6 +7,7 @@ final class GlobalShortcuts {
     private var handler: EventHandlerRef?
     var onComposer: (() -> Void)?
     var onSidebar: (() -> Void)?
+    var onSaveHighlight: (() -> Void)?
 
     func register() throws {
         var event = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
@@ -20,11 +21,12 @@ final class GlobalShortcuts {
             MainActor.assumeIsolated {
                 if id.id == 1 { shortcuts.onComposer?() }
                 if id.id == 2 { shortcuts.onSidebar?() }
+                if id.id == 3 { shortcuts.onSaveHighlight?() }
             }
             return noErr
         }, 1, &event, pointer, &handler)
         guard status == noErr else { throw ShortcutError.registration(status) }
-        for (id, key) in [(UInt32(1), kVK_Space), (UInt32(2), kVK_ANSI_H)] {
+        for (id, key) in [(UInt32(1), kVK_Space), (UInt32(2), kVK_ANSI_H), (UInt32(3), kVK_ANSI_S)] {
             var reference: EventHotKeyRef?
             let result = RegisterEventHotKey(UInt32(key), UInt32(controlKey | shiftKey),
                                             EventHotKeyID(signature: 0x4D52474E, id: id),
