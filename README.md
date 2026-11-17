@@ -23,7 +23,7 @@ Also watch [a question with no text selected](https://github.com/jackboyla/margi
 
 Ad-hoc beta builds are not notarized by Apple, and Gatekeeper may block them. If you trust the download, attempt to open it, then use **System Settings → Privacy & Security → Open Anyway** when macOS offers it. See [Apple's opening guidance](https://support.apple.com/en-us/102445) and check each release's signing notice.
 
-Saving selected text requires Device Control (Accessibility on macOS 26), independently of Screen Capture. If Margin reports that access is off after an update, re-enable its entry in **System Settings → Privacy & Security**; if the entry already appears enabled, turn it off and back on.
+Saving selected text requires Device Control (Accessibility on macOS 26), independently of Screen Capture. Enable the installed Margin app in **System Settings → Privacy & Security**. If it appears enabled but Margin still reports denied access, remove its permission entry and add the installed `Margin.app` again. Keep only one installed copy so the grant applies to the app you run.
 
 ## Use
 
