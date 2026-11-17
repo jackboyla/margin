@@ -372,7 +372,7 @@ final class WindowCapture {
             let role = string(item, kAXRoleAttribute) ?? ""
             if [kAXToolbarRole, kAXMenuRole, kAXMenuBarRole].contains(role) { continue }
             if result.url == nil, role == "AXWebArea" { result.url = documentURL(item) }
-            if includeContent, result.selection == nil, role == "AXWebArea" {
+            if includeContent, result.selection == nil {
                 result.selection = selection(item)
             }
             if includeContent, [kAXImageRole, "AXCanvas"].contains(role),
