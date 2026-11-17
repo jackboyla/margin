@@ -190,6 +190,7 @@ final class FloatingPanel: NSPanel {
                    styleMask: [.nonactivatingPanel, .borderless, .fullSizeContentView], backing: .buffered, defer: false)
         isFloatingPanel = true
         isMovable = true
+        appearance = NSAppearance(named: .darkAqua)
         level = .floating
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         backgroundColor = .clear
