@@ -13,7 +13,7 @@ enum PDFHighlightDocument {
 
         let pages = (0..<document.pageCount).compactMap { document.page(at: $0) }
         guard pages.count == document.pageCount,
-              !pages.contains(where: { $0.annotations.contains(where: { $0.type == PDFAnnotationSubtype.widget.rawValue }) })
+              !pages.contains(where: { $0.annotations.contains(where: { $0.type == "Widget" }) })
         else { return nil }
         guard !quotes.isEmpty else { return original }
         let text = pages.map { $0.string ?? "" }
