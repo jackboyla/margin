@@ -53,9 +53,10 @@ struct PDFReadingPosition {
         var pages: [Int: AXUIElement] = [:]
         var duplicatePage = false
         var editControls: [String: Bool] = [:]
-        guard walk(viewer, reading: [kAXTitleAttribute, kAXValueAttribute, kAXEnabledAttribute], visit: { node, attributes in
+        guard walk(viewer, reading: [kAXTitleAttribute, kAXValueAttribute, kAXEnabledAttribute, kAXDescriptionAttribute], visit: { node, attributes in
             let role = attributes[0] as? String
-            let title = attributes[2] as? String ?? ""
+            let label = attributes[2] as? String ?? ""
+            let title = label.isEmpty ? (attributes[5] as? String ?? "") : label
             // Chrome keeps its undo history after the drawing toolbar closes.
             if ["Draw", "Add text annotations"].contains(title), role == kAXCheckBoxRole || role == kAXButtonRole {
                 let inactive = (attributes[3] as? NSNumber)?.intValue == 0
