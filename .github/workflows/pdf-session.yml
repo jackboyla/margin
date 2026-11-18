@@ -1,0 +1,16 @@
+name: PDF accessibility session
+on: push
+permissions:
+  contents: read
+jobs:
+  session:
+    if: github.ref == 'refs/heads/test/pdf-viewport-runner'
+    runs-on: macos-26-intel
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check isolated GUI session
+        run: |
+          swift -e 'import ApplicationServices; print("Accessibility trusted:", AXIsProcessTrusted())'
+          ls /Applications | grep -E 'Chrome|Chromium'
+          "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --version
+          osascript -e 'return system attribute "USER"'
