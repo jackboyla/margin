@@ -2,7 +2,7 @@
   const reply = status => JSON.stringify({ status });
   if (location.href !== request.url || window !== top) return reply("changed");
   if (document.contentType !== "application/pdf" || location.origin !== "https://arxiv.org" ||
-      !location.pathname.startsWith("/pdf/") || !document.body) return reply("failed");
+      !location.pathname.startsWith("/pdf/") || !document.body) return reply("notPDF");
 
   const key = Symbol.for("com.jackboylan.margin.pdfViewport");
   const state = window[key] ??= { active: null, pending: null };
@@ -57,9 +57,14 @@
   if (previous?.token === token && previous.fragment === fragment) return reply(previous.status);
   let blob;
   try {
-    if (typeof request.bytes === "string" && request.bytes) {
-      const bytes = Uint8Array.fromBase64(request.bytes);
-      blob = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
+    if (typeof request.append === "string" && typeof request.sourceID === "string") {
+      // Every edit appends an independent annotation update to the same unmarked paper.
+      if (state.source?.id !== request.sourceID) {
+        if (!request.sourceBytes) return reply("sourceNeeded");
+        state.source = { id: request.sourceID, pdf: new Blob([Uint8Array.fromBase64(request.sourceBytes)]) };
+      }
+      blob = URL.createObjectURL(new Blob([state.source.pdf, Uint8Array.fromBase64(request.append)],
+        { type: "application/pdf" }));
     } else if (previous?.token === token && previous.status === "ready") {
       blob = previous.blob;
     } else {

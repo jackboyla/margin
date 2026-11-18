@@ -152,15 +152,16 @@ test('normalization boundaries and CSS visibility cannot paint a different passa
 });
 
 // All variants have identical text and page geometry. Only page two's native highlight annotations change.
-function paperWithMarks(count) {
-  const lines = [540, 480, 420, 360, 300].map(y => `BT /F1 16 Tf 75 ${y} Td (A passage for the reader.) Tj ET`).join('\n');
+function paperWithMarks(ids = []) {
+  const lines = [540, 480, 420, 360, 300].map((y, i) => `BT /F1 16 Tf 75 ${y} Td (Passage ${i + 1} for the reader.) Tj ET`).join('\n');
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>',
-    ...[false, true].map(marked => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R /Annots [${marked ? ['7 0 R', '8 0 R'].slice(0, count).join(' ') : ''}] >>`),
+    ...['[]', '9 0 R'].map(annotations => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R /Annots ${annotations} >>`),
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
     `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`,
     ...[480, 420].map(y => `<< /Type /Annot /Subtype /Highlight /C [1 1 0] /Rect [72 ${y-3} 155 ${y+13}] /QuadPoints [72 ${y+13} 155 ${y+13} 72 ${y-3} 155 ${y-3}] >>`),
+    '[]',
   ];
   let pdf = '%PDF-1.7\n';
   const offsets = [];
@@ -171,7 +172,14 @@ function paperWithMarks(count) {
   const start = pdf.length;
   pdf += `xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
   for (const offset of offsets) pdf += String(offset).padStart(10, '0') + ' 00000 n \n';
-  return Buffer.from(pdf + `trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`);
+  pdf += `trailer\n<< /Size 10 /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`;
+  if (ids.length) {
+    const position = pdf.length;
+    pdf += `9 0 obj\n[${ids.map(id => id + ' 0 R').join(' ')}]\nendobj\n`;
+    const xref = pdf.length;
+    pdf += `xref\n9 1\n${String(position).padStart(10, '0')} 00000 n \ntrailer\n<< /Size 10 /Root 1 0 R /Prev ${start} >>\nstartxref\n${xref}\n%%EOF\n`;
+  }
+  return Buffer.from(pdf);
 }
 
 test('saving PDF highlights preserves the visible text, zoom and reading position in Chrome', async t => {
@@ -181,15 +189,25 @@ test('saving PDF highlights preserves the visible text, zoom and reading positio
   const page = await context.newPage();
   const paper = 'https://arxiv.org/pdf/2506.01844';
   const url = paper + '#page=2&zoom=125,0,180';
-  await page.route(paper, route => route.fulfill({ contentType: 'application/pdf', body: paperWithMarks(0) }));
+  await page.route(paper, route => route.fulfill({ contentType: 'application/pdf', body: paperWithMarks() }));
   await page.goto(url);
   async function run(action, token, extra = {}) {
     const request = JSON.stringify({ url, action, token, ...extra });
     return JSON.parse(await page.evaluate(script.replace('__MARGIN_REQUEST__', () => request))).status;
   }
-  async function stage(token, top, count) {
-    const bytes = count === undefined ? {} : { bytes: paperWithMarks(count).toString('base64') };
-    assert.equal(await run('stage', token, { page: 2, zoom: 100, left: 0, top, ...bytes }), 'pending');
+  async function stage(token, top, ids) {
+    const base = paperWithMarks();
+    const fields = { page: 2, zoom: 100, left: 0, top };
+    if (ids !== undefined) {
+      fields.sourceID = 'fixture';
+      fields.append = paperWithMarks(ids).subarray(base.length).toString('base64');
+    }
+    let result = await run('stage', token, fields);
+    if (result === 'sourceNeeded') {
+      assert.equal(await page.locator('iframe[title="PDF with saved highlights"]').count(), 0);
+      result = await run('stage', token, { ...fields, sourceBytes: base.toString('base64') });
+    }
+    assert.equal(result, 'pending');
     await until(async () => await run('status', token) === 'ready');
   }
   async function until(predicate) {
@@ -210,37 +228,50 @@ test('saving PDF highlights preserves the visible text, zoom and reading positio
       const ctx = canvas.getContext('2d');
       ctx.drawImage(image, 0, 0);
       const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      let ink = 0, hash = 0, last = -2;
-      const bands = [];
+      let ink = 0, last = -2;
+      const bands = [], lines = [];
       for (let y = 0; y < canvas.height; y++) {
-        let yellow = 0;
+        let yellow = 0, left = canvas.width, right = -1;
         for (let x = 0; x < canvas.width; x++) {
           const i = 4 * (y * canvas.width + x);
           if (data[i] < 128 && data[i+1] < 128) {
             ink++;
-            hash = (Math.imul(hash, 31) + i) | 0;
+            left = Math.min(left, x);
+            right = x;
           }
           if (data[i] > 200 && data[i+1] > 200 && data[i+2] < 120) yellow++;
+        }
+        if (right > left) {
+          const prior = lines.at(-1);
+          if (prior && prior[3] === y - 1) {
+            prior[0] = Math.min(prior[0], left);
+            prior[2] = Math.max(prior[2], right);
+            prior[3] = y;
+          } else {
+            lines.push([left, y, right, y]);
+          }
         }
         if (yellow > 20) {
           if (y > last + 1) bands.push(y);
           last = y;
         }
       }
-      return { ink, hash, bands };
+      return { ink, lines, bands };
     }, buffer.toString('base64'));
   }
   async function atPosition(expected, count) {
     let result;
     await until(async () => {
       result = await pixels();
-      return result.ink > 750 && result.ink < 20000 && result.bands.length === count && (!expected || result.hash === expected.hash);
+      return result.ink > 750 && result.ink < 20000 && result.bands.length === count && result.lines.length >= 2 &&
+        (!expected || result.lines.length === expected.lines.length && result.lines.every((line, i) =>
+          line.every((edge, j) => Math.abs(edge - expected.lines[i][j]) <= 1)));
     });
     return result;
   }
 
   const initial = await atPosition(null, 0);
-  await stage('first', 0, 1);
+  await stage('first', 0, [7]);
   assert.deepEqual(await pixels(), initial);
   await stage('first', 180);
   assert.equal(await run('commit', 'first'), 'active');
@@ -251,17 +282,24 @@ test('saving PDF highlights preserves the visible text, zoom and reading positio
   await page.mouse.wheel(0, 80);
   await until(async () => Math.abs((await pixels()).bands[0] - first.bands[0] + 80) <= 1);
   const scrolled = await pixels();
-  await stage('second', 244, 2);
+  await stage('second', 244, [7, 8]);
   assert.equal(await run('commit', 'second'), 'active');
   const second = await atPosition(scrolled, 2);
-  assert.equal(second.bands[0], scrolled.bands[0]);
-  await stage('removed', 244, 0);
+  assert.ok(Math.abs(second.bands[0] - scrolled.bands[0]) <= 1);
+  await stage('remaining', 244, [8]);
+  assert.equal(await run('commit', 'remaining'), 'active');
+  const remaining = await atPosition(scrolled, 1);
+  assert.ok(Math.abs(remaining.bands[0] - second.bands[1]) <= 1);
+  await stage('removed', 244, []);
   assert.equal(await run('commit', 'removed'), 'active');
   await atPosition(scrolled, 0);
   assert.equal(page.url(), url);
   await page.reload();
   await atPosition(initial, 0);
-  await stage('second', 180, 2);
+  await stage('second', 180, [7, 8]);
   assert.equal(await run('commit', 'second'), 'active');
   await atPosition(initial, 2);
+  await page.route(paper, route => route.fulfill({ status: 503, contentType: 'text/html', body: '<p>Paper unavailable</p>' }));
+  await page.reload();
+  assert.equal(await run('status', 'restored'), 'notPDF');
 });

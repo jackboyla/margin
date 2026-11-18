@@ -40,8 +40,8 @@ await trace('attached Chrome');
 let child;
 try {
   const context=browser.contexts()[0];
-  const p=context.pages()[0]; await p.bringToFront();
-  await p.route('https://arxiv.org/pdf/2506.01844',r=>r.fulfill({path:process.env.RUNNER_TEMP+'/smolvla.pdf',contentType:'application/pdf'}));
+  let p=context.pages()[0]; await p.bringToFront();
+  await context.route('https://arxiv.org/pdf/2506.01844',r=>r.fulfill({path:process.env.RUNNER_TEMP+'/smolvla.pdf',contentType:'application/pdf'}));
   await trace('opening original HTTPS address');
   const response=await p.goto(url,{timeout:30000,waitUntil:'commit'});
   console.log('HTTP',response.status(),await response.headerValue('content-type'),await p.evaluate(()=>document.contentType));
@@ -58,7 +58,7 @@ try {
   await initialSnapshot;
   let completed=false;
   const completion=once(child,'exit').then(([code])=>{completed=true; return code;});
-  const deadline=Date.now()+180000;
+  const deadline=Date.now()+400000;
   while(!completed && Date.now()<deadline) {
     let content;
     try{content=await readFile(ipc+'/request','utf8')}catch(e){if(e.code!=='ENOENT')throw e;await delay(25);continue}
@@ -67,7 +67,14 @@ try {
     let reply;
     if(p.url()!==url) throw Error('top-level document changed: '+p.url());
     if(request.action==='reset') {
-      await p.reload({waitUntil:'commit'});
+      if(request.reopen) {
+        const old=p;
+        p=await context.newPage();
+        await old.close();
+        await p.goto(url,{waitUntil:'commit'});
+      } else {
+        await p.reload({waitUntil:'commit'});
+      }
       await p.bringToFront();
       await delay(4000);
       reply='ok';

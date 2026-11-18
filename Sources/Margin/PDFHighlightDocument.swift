@@ -1,10 +1,11 @@
-import AppKit
+import Foundation
+import JavaScriptCore
 import MarginCore
 import PDFKit
 
 enum PDFHighlightDocument {
-    /// Rebuild from the original bytes so removing a saved passage also removes its markup.
-    static func annotated(_ original: Data, quotes: [String]) -> Data? {
+    /// PDF incremental update to append to the original bytes. An empty update leaves all source objects intact.
+    static func annotationUpdate(for original: Data, quotes: [String]) -> Data? {
         guard let document = PDFDocument(data: original), !document.isLocked,
               let catalog = document.documentRef?.catalog else { return nil }
         // Form values belong to the live viewer and may differ from the downloaded file.
@@ -15,15 +16,15 @@ enum PDFHighlightDocument {
         guard pages.count == document.pageCount,
               !pages.contains(where: { $0.annotations.contains(where: { $0.type == "Widget" }) })
         else { return nil }
-        guard !quotes.isEmpty else { return original }
+        guard !quotes.isEmpty else { return Data() }
         let text = pages.map { $0.string ?? "" }
-        var modified = false
+        var annotations: [[String: Any]] = []
 
         for quote in Set(quotes) {
             let matches = HighlightMatcher.matchedRanges(quote: quote, lines: text)
             guard !matches.isEmpty else { continue }
             var selected: [String] = []
-            var markup: [(PDFPage, PDFAnnotation)] = []
+            var markup: [[String: Any]] = []
 
             for match in matches {
                 let page = pages[match.line]
@@ -33,31 +34,36 @@ enum PDFHighlightDocument {
                 let lines = selection.selectionsByLine().map { $0.bounds(for: page) }
                 guard !lines.isEmpty, lines.allSatisfy({ !$0.isEmpty && !$0.isInfinite }) else { break }
                 let bounds = lines.reduce(CGRect.null) { $0.union($1) }
-                let annotation = PDFAnnotation(bounds: bounds, forType: .highlight, withProperties: nil)
-                annotation.color = NSColor.yellow.withAlphaComponent(0.4)
-                annotation.quadrilateralPoints = lines.flatMap { line -> [NSValue] in
-                    let rect = line.offsetBy(dx: -bounds.minX, dy: -bounds.minY)
-                    return [
-                        NSValue(point: CGPoint(x: rect.minX, y: rect.maxY)),
-                        NSValue(point: CGPoint(x: rect.maxX, y: rect.maxY)),
-                        NSValue(point: CGPoint(x: rect.minX, y: rect.minY)),
-                        NSValue(point: CGPoint(x: rect.maxX, y: rect.minY))
-                    ]
+                let points = lines.flatMap { rect in
+                    [rect.minX, rect.maxY, rect.maxX, rect.maxY, rect.minX, rect.minY, rect.maxX, rect.minY]
                 }
                 selected.append(passage)
-                markup.append((page, annotation))
+                markup.append(["page": match.line, "bounds": [bounds.minX, bounds.minY, bounds.maxX, bounds.maxY],
+                               "quadPoints": points])
             }
 
             // Compatibility normalization can match part of a single glyph, such as ⅓.
             // Check PDFKit's actual selection before painting any part of this quote.
             guard markup.count == matches.count,
                   words(selected.joined(separator: " ")) == words(quote) else { continue }
-            for (page, annotation) in markup { page.addAnnotation(annotation) }
-            modified = true
+            annotations.append(contentsOf: markup)
         }
 
-        return modified ? document.dataRepresentation() : original
+        guard !annotations.isEmpty else { return Data() }
+        guard let library, let writer, let context = JSContext() else { return nil }
+        context.evaluateScript(library)
+        context.evaluateScript(writer)
+        guard context.exception == nil, let function = context.objectForKeyedSubscript("highlightIncrement"),
+              let promise = function.call(withArguments: [original.base64EncodedString(), annotations]) else { return nil }
+        context.setObject(promise, forKeyedSubscript: "increment" as NSString)
+        context.evaluateScript("var encoded; increment.then(value => { encoded = value }, () => {});")
+        guard let value = context.objectForKeyedSubscript("encoded"), value.isString,
+              let base64 = value.toString(), let suffix = Data(base64Encoded: base64), !suffix.isEmpty else { return nil }
+        return suffix
     }
+
+    private static let library = MarginResources.script("pdf-lib.min", in: "PDFWriter")
+    private static let writer = MarginResources.script("annotations", in: "PDFWriter")
 
     private static func words(_ text: String) -> [Substring] {
         text.split(whereSeparator: \.isWhitespace)

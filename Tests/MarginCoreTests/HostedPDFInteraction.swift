@@ -75,7 +75,7 @@ final class HostedPDFInteraction: XCTestCase {
         XCTAssertEqual(permission,0)
         guard permission == 0 else {return}
         _ = try await exchange(["action":"reset"])
-        let capture = WindowCapture()
+        var capture = WindowCapture()
         let target = try await capture.resolve(target: capture.currentTarget())
         XCTAssertEqual(target.bundleID,"com.google.Chrome")
         XCTAssertEqual(target.url?.components(separatedBy:"#").first,"https://arxiv.org/pdf/2506.01844")
@@ -83,11 +83,16 @@ final class HostedPDFInteraction: XCTestCase {
         let second = "tradeoff between speed and performance"
         if let tmp=env["RUNNER_TEMP"] {
             let bytes=try Data(contentsOf:URL(fileURLWithPath:tmp+"/smolvla.pdf"))
-            try PDFHighlightDocument.annotated(bytes,quotes:[first])?.write(to:URL(fileURLWithPath:tmp+"/margin-native-annotated.pdf"))
+            let update = try XCTUnwrap(PDFHighlightDocument.annotationUpdate(for: bytes, quotes: [first]))
+            try (bytes + update).write(to: URL(fileURLWithPath: tmp+"/margin-native-annotated.pdf"))
         }
         var initial:PDFReadingPosition?
         var previous=""
-        for (step,quotes) in [[first],[first,second],[second],[]].enumerated() {
+        for (step,quotes) in [[first],[first,second],[second],[],[first,second]].enumerated() {
+            if step == 4 {
+                _ = try await exchange(["action":"reset", "reopen":true])
+                capture = WindowCapture()
+            }
             _ = try await exchange(["action":"interaction","step":step])
             var pos:PDFReadingPosition?
             let deadline=Date().addingTimeInterval(8)
@@ -104,8 +109,16 @@ final class HostedPDFInteraction: XCTestCase {
                 XCTAssertGreaterThan(abs(travelled.height),30)
                 print("API-TRACE physical wheel",travelled)
             }
-            let painted=try await capture.paintBrowserHighlights(target:target,quotes:quotes,isCurrent:{true})
-            XCTAssertTrue(painted)
+            var painted = BrowserHighlightState.deferred
+            let until = Date().addingTimeInterval(75)
+            var attempts = 0
+            while painted == .deferred && Date() < until {
+                painted = try await capture.paintBrowserHighlights(target:target,quotes:quotes,isCurrent:{true})
+                attempts += 1
+                print("API-TRACE reconciliation", step, attempts, painted)
+                if painted == .deferred { try await Task.sleep(for: .seconds(1)) }
+            }
+            XCTAssertEqual(painted, .current)
             let src=try await exchange(["action":"evidence","step":step])
             guard src.hasPrefix("blob:https://arxiv.org/"),src != previous else {
                 XCTFail("Chrome did not commit a fresh annotated frame at step \(step)");return
