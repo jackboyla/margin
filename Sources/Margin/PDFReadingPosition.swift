@@ -27,25 +27,26 @@ struct PDFReadingPosition {
     /// Positive offsets mean the candidate's text lies farther right or down.
     func displacement(from original: Self) -> CGSize? {
         guard pageNumber == original.pageNumber, zoomPercent == original.zoomPercent else { return nil }
-        var offset: CGSize?
-        var firstCenter: CGPoint?
-        var separateLines = false
-        for (line, rect) in lines {
-            guard let reference = original.lines[line] else { continue }
-            guard abs(rect.width - reference.width) <= 1, abs(rect.height - reference.height) <= 1 else { return nil }
-            let delta = CGSize(width: rect.minX - reference.minX, height: rect.minY - reference.minY)
-            if let offset {
-                guard abs(offset.width - delta.width) <= 1, abs(offset.height - delta.height) <= 1 else { return nil }
-            } else {
-                offset = delta
-            }
-            if let firstCenter {
-                if abs(firstCenter.y - reference.midY) > reference.height { separateLines = true }
-            } else {
-                firstCenter = CGPoint(x: reference.midX, y: reference.midY)
-            }
+        return Self.lineDisplacement(lines, from: original.lines)
+    }
+
+    static func lineDisplacement(_ lines: [String: CGRect], from original: [String: CGRect]) -> CGSize? {
+        // Chrome can split links into different accessibility runs in two views of the same PDF.
+        let samples = lines.compactMap { line, rect -> (shift: CGSize, reference: CGRect)? in
+            guard let reference = original[line],
+                  abs(rect.width - reference.width) <= 1, abs(rect.height - reference.height) <= 1,
+                  rect.width > 1, rect.height > 1 else { return nil }
+            return (CGSize(width: rect.minX - reference.minX, height: rect.minY - reference.minY), reference)
         }
-        return separateLines ? offset : nil
+        guard samples.count >= 3 else { return nil }
+        let middle = samples.count / 2
+        let shift = CGSize(width: samples.map { $0.shift.width }.sorted()[middle],
+                           height: samples.map { $0.shift.height }.sorted()[middle])
+        let agreeing = samples.filter { abs($0.shift.width - shift.width) <= 1 && abs($0.shift.height - shift.height) <= 1 }
+        guard agreeing.count >= 3, agreeing.count * 4 >= samples.count * 3,
+              let top = agreeing.map({ $0.reference.maxY }).min(),
+              let bottom = agreeing.map({ $0.reference.minY }).max(), bottom > top else { return nil }
+        return shift
     }
 
     private static func read(_ viewer: AXUIElement) -> Self? {

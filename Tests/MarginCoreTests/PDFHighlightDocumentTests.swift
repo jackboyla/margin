@@ -5,6 +5,22 @@ import XCTest
 @testable import Margin
 
 final class PDFHighlightDocumentTests: XCTestCase {
+    func testReadingPositionRequiresAgreementAcrossLines() {
+        let original: [String: CGRect] = [
+            "heading": CGRect(x: 90, y: 100, width: 130, height: 20),
+            "body": CGRect(x: 90, y: 160, width: 240, height: 20),
+            "caption": CGRect(x: 90, y: 220, width: 110, height: 16),
+            "reference": CGRect(x: 430, y: 220, width: 50, height: 16),
+            "wrapped link": CGRect(x: 90, y: 280, width: 320, height: 20)
+        ]
+        var staged = original.mapValues { $0.offsetBy(dx: 0, dy: 447) }
+        staged["reference"]?.origin.x += 1011
+        staged["wrapped link"]?.size.width -= 6
+        XCTAssertEqual(PDFReadingPosition.lineDisplacement(staged, from: original), CGSize(width: 0, height: 447))
+        staged["caption"]?.origin.y += 40
+        XCTAssertNil(PDFReadingPosition.lineDisplacement(staged, from: original))
+    }
+
     func testOnlySelectedWordsOnEachLineReceiveMarkup() throws {
         let data = NSMutableData()
         var size = CGRect(x: 0, y: 0, width: 480, height: 560)
