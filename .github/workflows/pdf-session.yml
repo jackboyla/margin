@@ -5,7 +5,7 @@ permissions:
 jobs:
   session:
     if: github.ref == 'refs/heads/test/pdf-viewport-runner'
-    runs-on: macos-26-intel
+    runs-on: macos-26
     timeout-minutes: 15
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -14,6 +14,11 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
+      - name: Record the native test environment
+        run: |
+          uname -m
+          sw_vers
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "/Applications/Google Chrome.app/Contents/Info.plist"
       - run: npm ci
       - run: swift test --filter PDFHighlightDocumentTests
       - name: Fetch the public paper
