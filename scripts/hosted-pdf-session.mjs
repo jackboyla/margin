@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { readFile, writeFile, rename, unlink, mkdir } from 'node:fs/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { once } from 'node:events';
+import { pathToFileURL } from 'node:url';
 
 const dir=process.env.RUNNER_TEMP+'/margin-evidence', ipc=process.env.RUNNER_TEMP+'/margin-ipc';
 await mkdir(dir,{recursive:true}); await mkdir(ipc,{recursive:true});
@@ -11,21 +12,31 @@ const source=await readFile('Sources/Margin/Resources/PDFViewport.js','utf8');
 const profile=process.env.RUNNER_TEMP+'/margin-chrome';
 await mkdir(profile+'/Default',{recursive:true});
 await writeFile(profile+'/Default/Preferences',JSON.stringify({browser:{allow_javascript_apple_events:true}}));
-const browser=await chromium.launchPersistentContext(profile,{channel:'chrome',headless:false,viewport:null,args:['--no-first-run','--no-default-browser-check','--force-renderer-accessibility','--window-size=1300,850']});
+const local=pathToFileURL(process.env.RUNNER_TEMP+'/smolvla.pdf').href+'#page=4&zoom=150,0,298';
+const args=['-na','Google Chrome','--args','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'--window-size=1300,850',local];
+await once(spawn('/usr/bin/open',args,{stdio:'inherit'}),'exit');
+await delay(4500);
+const base=spawn('swift',['test','--skip-build','--filter','HostedPDFInteraction'],{stdio:'inherit',env:{...process.env,MARGIN_HOSTED_INTERACTION:'1',MARGIN_IPC:ipc,MARGIN_AX_ONLY:'1'}});
+console.log('Local PDF AX exit',await once(base,'exit'));
+const [port]=String(await readFile(profile+'/DevToolsActivePort')).split('\n');
+const browser=await chromium.connectOverCDP('http://127.0.0.1:'+port);
 let child;
 try {
-  const p=await browser.newPage(); await p.bringToFront();
+  const context=browser.contexts()[0];
+  const p=context.pages()[0]; await p.bringToFront();
   await p.route('https://arxiv.org/pdf/2506.01844',r=>r.fulfill({path:process.env.RUNNER_TEMP+'/smolvla.pdf',contentType:'application/pdf'}));
   const response=await p.goto(url,{timeout:30000,waitUntil:'commit'});
   console.log('HTTP',response.status(),await response.headerValue('content-type'),await p.evaluate(()=>document.contentType));
   if(response.status()!==200||await p.evaluate(()=>document.contentType)!=='application/pdf') throw Error('paper unavailable');
   await delay(3500);
   async function snapshot(name) {
-    try {await p.screenshot({path:dir+'/'+name+'.png',timeout:4500})}
-    catch (error) { console.warn('Chrome screenshot:',String(error));const cp=spawn('/usr/sbin/screencapture',['-x',dir+'/'+name+'-desktop.png'],{stdio:'inherit'});const watchdog=setTimeout(()=>cp.kill(),3000);await once(cp,'exit');clearTimeout(watchdog); }
+    const cp=spawn('/usr/sbin/screencapture',['-x',dir+'/'+name+'.png'],{stdio:'inherit'});
+    const watchdog=setTimeout(()=>cp.kill(),4000);
+    await once(cp,'exit');clearTimeout(watchdog);
   }
-  await snapshot('before');
+  const initialSnapshot=snapshot('before');
   child=spawn('swift',['test','--skip-build','--filter','HostedPDFInteraction'],{stdio:'inherit',env:{...process.env,MARGIN_HOSTED_INTERACTION:'1',MARGIN_IPC:ipc}});
+  await initialSnapshot;
   let completed=false;
   const completion=once(child,'exit').then(([code])=>{completed=true; return code;});
   const deadline=Date.now()+180000;

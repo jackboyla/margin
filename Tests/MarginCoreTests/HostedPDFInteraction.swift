@@ -13,8 +13,19 @@ final class HostedPDFInteraction: XCTestCase {
         let app = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").first { !$0.isTerminated })
         print("API-TRACE Chrome",app.processIdentifier,app.isActive)
         let ax = AXUIElementCreateApplication(app.processIdentifier)
+        AXUIElementSetMessagingTimeout(ax, 1.5)
         var value: CFTypeRef?
-        XCTAssertEqual(AXUIElementCopyAttributeValue(ax, kAXFocusedWindowAttribute as CFString, &value), .success)
+        let deadline = Date().addingTimeInterval(20)
+        while value == nil && Date() < deadline {
+            let status = AXUIElementCopyAttributeValue(ax,kAXFocusedWindowAttribute as CFString,&value)
+            if status != .success {
+                var windows:CFTypeRef?
+                let all=AXUIElementCopyAttributeValue(ax,kAXWindowsAttribute as CFString,&windows)
+                value=(windows as? [AXUIElement])?.first
+                print("AX-DIAG window",status.rawValue,all.rawValue)
+                if value == nil { try await Task.sleep(for:.milliseconds(400)) }
+            }
+        }
         let window = unsafeBitCast(try XCTUnwrap(value), to: AXUIElement.self)
         func exchange(_ fields: [String: Any]) async throws -> String {
             try JSONSerialization.data(withJSONObject: fields).write(to: ipc.appendingPathComponent("request"), options: .atomic)
@@ -50,11 +61,12 @@ final class HostedPDFInteraction: XCTestCase {
             rows.append(String(repeating:" ",count:depth)+row)
             if let kids=a[5] as? [AXUIElement] { queue += kids.map { ($0,depth+1) } }
         }
-        if let tmp = env["RUNNER_TEMP"] { try rows.joined(separator:"\n").write(toFile:tmp+"/margin-evidence/ax-tree.txt",atomically:true,encoding:.utf8) }
+        if let tmp = env["RUNNER_TEMP"] { try rows.joined(separator:"\n").write(toFile:tmp+"/margin-evidence/ax-tree-"+(env["MARGIN_AX_ONLY"] ?? "web")+".txt",atomically:true,encoding:.utf8) }
         print("AX-DIAG snapshot",rows.count,rows.filter { $0.contains("AXWebArea") || $0.contains("Page number") || $0.contains("Zoom level") }.prefix(10))
         let before = try XCTUnwrap(PDFReadingPosition.current(in: window))
         print("API-TRACE baseline", before.pageNumber, before.zoomPercent)
         XCTAssertEqual(before.pageNumber, 4)
+        if env["MARGIN_AX_ONLY"] == "1" { return }
         let painter=ChromePDFHighlights()
         let paper=try XCTUnwrap(URL(string:"https://arxiv.org/pdf/2506.01844"))
         let first = "the best features for downstream tasks"
