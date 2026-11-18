@@ -75,16 +75,24 @@ final class HostedPDFInteraction: XCTestCase {
         if env["MARGIN_AX_ONLY"] == "1" { return }
         let painter=ChromePDFHighlights()
         let paper=try XCTUnwrap(URL(string:"https://arxiv.org/pdf/2506.01844"))
-        let first = "the best features for downstream tasks"
+        let first = "Faster inference through layer skipping"
         let second = "tradeoff between speed and performance"
         for (step, quotes) in [[first], [first, second], [second], []].enumerated() {
+            _ = try await exchange(["action":"interaction","step":step])
+            let baseline = try XCTUnwrap(PDFReadingPosition.current(in:window))
+            if step == 1 {
+                let travelled = try XCTUnwrap(baseline.displacement(from:before))
+                XCTAssertGreaterThan(abs(travelled.height),30)
+                print("API-TRACE physical wheel",travelled)
+            }
             let result = try await painter.paint(paper:paper, quotes:quotes, isCurrent:{true}, command:exchange, position:{ previous in PDFReadingPosition.current(in:window,excluding:previous) })
             XCTAssertTrue(result)
             let src=try await exchange(["action":"evidence","step":step])
             print("API-TRACE after",step,src.prefix(100))
-            XCTAssertTrue(src.hasPrefix("blob:https://arxiv.org/"))
+            guard src.hasPrefix("blob:https://arxiv.org/") else { XCTFail("Chrome has no active annotated PDF at step \(step)"); return }
             let position = try XCTUnwrap(PDFReadingPosition.current(in: window))
-            let delta = try XCTUnwrap(position.displacement(from: before))
+            let delta = try XCTUnwrap(position.displacement(from: baseline))
+            print("API-TRACE same position across edit",step,delta)
             XCTAssertLessThanOrEqual(abs(delta.width), 1)
             XCTAssertLessThanOrEqual(abs(delta.height), 1)
         }

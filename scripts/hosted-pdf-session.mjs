@@ -65,7 +65,17 @@ try {
     await unlink(ipc+'/request');
     const request=JSON.parse(content);
     let reply;
-    if(request.action==='evidence') {
+    if(p.url()!==url) throw Error('top-level document changed: '+p.url());
+    if(request.action==='interaction') {
+      if(request.step===1) {
+        await p.mouse.click(390,210);
+        await p.mouse.move(690,290);
+        await p.mouse.wheel(0,96);
+        await delay(500);
+      }
+      await snapshot('before-'+request.step);
+      reply='ok';
+    } else if(request.action==='evidence') {
       await delay(350);
       await snapshot('after-'+request.step);
       reply=await p.evaluate(()=>document.querySelector('iframe[title="PDF with saved highlights"]')?.src??'');
