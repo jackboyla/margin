@@ -1,3 +1,4 @@
+import CryptoKit
 import AppKit
 import ApplicationServices
 import XCTest
@@ -69,5 +70,20 @@ final class HostedPDFInteraction: XCTestCase {
             XCTAssertLessThanOrEqual(abs(delta.width), 1)
             XCTAssertLessThanOrEqual(abs(delta.height), 1)
         }
+        print("API-TRACE geometry and four replacements passed")
+        let permission = await HostedAutomationConsent.askForChrome()
+        print("APPLE-EVENT permission result", permission)
+        guard permission == 0 else { return }
+        let capture = WindowCapture()
+        let target = try await capture.resolve(target: capture.currentTarget())
+        XCTAssertEqual(target.bundleID, "com.google.Chrome")
+        XCTAssertEqual(target.url?.components(separatedBy:"#").first, paper.absoluteString)
+        let painted = try await capture.paintBrowserHighlights(target:target, quotes:[first], isCurrent:{true})
+        XCTAssertTrue(painted)
+        let src = try await exchange(["action":"evidence","step":"apple-event"])
+        XCTAssertTrue(src.hasPrefix("blob:https://arxiv.org/"))
+        let active = try await exchange(["action":"status","token":Data(SHA256.hash(data: JSONEncoder().encode([paper.absoluteString,first]))).base64EncodedString()])
+        XCTAssertEqual(active,"active")
+        print("APPLE-EVENT verified",src)
     }
 }

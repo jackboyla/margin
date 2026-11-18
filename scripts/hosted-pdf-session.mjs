@@ -8,17 +8,21 @@ const dir=process.env.RUNNER_TEMP+'/margin-evidence', ipc=process.env.RUNNER_TEM
 await mkdir(dir,{recursive:true}); await mkdir(ipc,{recursive:true});
 const url='https://arxiv.org/pdf/2506.01844#page=4&zoom=150,0,298';
 const source=await readFile('Sources/Margin/Resources/PDFViewport.js','utf8');
-const browser=await chromium.launchPersistentContext(process.env.RUNNER_TEMP+'/margin-chrome',{channel:'chrome',headless:false,viewport:null,args:['--no-first-run','--no-default-browser-check','--force-renderer-accessibility','--window-size=1300,850']});
+const profile=process.env.RUNNER_TEMP+'/margin-chrome';
+await mkdir(profile+'/Default',{recursive:true});
+await writeFile(profile+'/Default/Preferences',JSON.stringify({browser:{allow_javascript_apple_events:true}}));
+const browser=await chromium.launchPersistentContext(profile,{channel:'chrome',headless:false,viewport:null,args:['--no-first-run','--no-default-browser-check','--force-renderer-accessibility','--window-size=1300,850']});
 let child;
 try {
   const p=await browser.newPage(); await p.bringToFront();
+  await p.route('https://arxiv.org/pdf/2506.01844',r=>r.fulfill({path:process.env.RUNNER_TEMP+'/smolvla.pdf',contentType:'application/pdf'}));
   const response=await p.goto(url,{timeout:30000,waitUntil:'commit'});
   console.log('HTTP',response.status(),await response.headerValue('content-type'),await p.evaluate(()=>document.contentType));
   if(response.status()!==200||await p.evaluate(()=>document.contentType)!=='application/pdf') throw Error('paper unavailable');
   await delay(3500);
   async function snapshot(name) {
     try {await p.screenshot({path:dir+'/'+name+'.png',timeout:4500})}
-    catch (error) { console.warn('Chrome screenshot:',String(error));const cp=spawn('/usr/sbin/screencapture',['-x',dir+'/'+name+'-desktop.png'],{stdio:'inherit'});await once(cp,'exit'); }
+    catch (error) { console.warn('Chrome screenshot:',String(error));const cp=spawn('/usr/sbin/screencapture',['-x',dir+'/'+name+'-desktop.png'],{stdio:'inherit'});const watchdog=setTimeout(()=>cp.kill(),3000);await once(cp,'exit');clearTimeout(watchdog); }
   }
   await snapshot('before');
   child=spawn('swift',['test','--skip-build','--filter','HostedPDFInteraction'],{stdio:'inherit',env:{...process.env,MARGIN_HOSTED_INTERACTION:'1',MARGIN_IPC:ipc}});

@@ -16,6 +16,13 @@ jobs:
           node-version: 24
       - run: npm ci
       - run: swift test --filter PDFHighlightDocumentTests
+      - name: Fetch the public paper
+        run: |
+          for endpoint in arxiv.org export.arxiv.org; do
+            curl --fail --location --retry 2 --connect-timeout 8 --max-time 45 "https://$endpoint/pdf/2506.01844" -o "$RUNNER_TEMP/smolvla.pdf" && break
+          done
+          test "$(head -c 4 "$RUNNER_TEMP/smolvla.pdf")" = '%PDF'
+          shasum -a 256 "$RUNNER_TEMP/smolvla.pdf"
       - run: node scripts/hosted-pdf-session.mjs
       - if: always()
         uses: actions/upload-artifact@v7
