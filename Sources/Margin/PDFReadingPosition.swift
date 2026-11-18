@@ -27,15 +27,23 @@ struct PDFReadingPosition {
     /// Positive offsets mean the candidate's text lies farther right or down.
     func displacement(from original: Self) -> CGSize? {
         guard pageNumber == original.pageNumber, zoomPercent == original.zoomPercent else { return nil }
+        if let dir=ProcessInfo.processInfo.environment["RUNNER_TEMP"] {
+            struct Record:Codable { let line:String; let source:CGRect?; let candidate:CGRect? }
+            let keys=Set(lines.keys).union(original.lines.keys).sorted()
+            let records=keys.map { Record(line:$0,source:original.lines[$0],candidate:lines[$0]) }
+            let file=URL(fileURLWithPath:dir+"/margin-evidence/positions-"+UUID().uuidString+".json")
+            try? JSONEncoder().encode(records).write(to:file,options:.atomic)
+            print("AX-DIAG pairs",original.lines.count,lines.count,Set(lines.keys).intersection(original.lines.keys).count,file.lastPathComponent)
+        }
         var offset: CGSize?
         var firstCenter: CGPoint?
         var separateLines = false
         for (line, rect) in lines {
             guard let reference = original.lines[line] else { continue }
-            guard abs(rect.width - reference.width) <= 1, abs(rect.height - reference.height) <= 1 else { return nil }
+            guard abs(rect.width - reference.width) <= 1, abs(rect.height - reference.height) <= 1 else { print("AX-DIAG size",line.prefix(30),rect,reference); return nil }
             let delta = CGSize(width: rect.minX - reference.minX, height: rect.minY - reference.minY)
             if let offset {
-                guard abs(offset.width - delta.width) <= 1, abs(offset.height - delta.height) <= 1 else { return nil }
+                guard abs(offset.width - delta.width) <= 1, abs(offset.height - delta.height) <= 1 else { print("AX-DIAG offset drift",line.prefix(35),offset,delta); return nil }
             } else {
                 offset = delta
             }
@@ -45,6 +53,7 @@ struct PDFReadingPosition {
                 firstCenter = CGPoint(x: reference.midX, y: reference.midY)
             }
         }
+        if !separateLines {print("AX-DIAG no distinct lines")}
         return separateLines ? offset : nil
     }
 
