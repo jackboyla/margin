@@ -12,6 +12,7 @@ final class HighlightOverlays {
     private var needsRefresh = false
     private var needsPageCheck = true
     private var browserOwnsPage = false
+    private var browserNeedsRetry = false
     private var needsRescan = false
     private var pendingCapture: CapturedWindow?
     private var tracked: TrackedHighlights?
@@ -42,6 +43,7 @@ final class HighlightOverlays {
             guard let self else { return }
             self.generation += 1
             self.tracked = nil
+            self.browserNeedsRetry = true
             if self.model?.library.highlights.isEmpty == true { self.window.orderOut(nil) }
             self.requestRefresh()
         }
@@ -72,7 +74,7 @@ final class HighlightOverlays {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
-                if self.model?.library.highlights.isEmpty == false || self.model?.capture.awaitingPDFClear == true,
+                if self.model?.library.highlights.isEmpty == false || self.browserNeedsRetry,
                    let target = try? self.model?.capture.currentTarget(),
                    self.model?.capture.isChromiumBrowser(target.bundleID) == true {
                     self.needsPageCheck = true
@@ -140,12 +142,13 @@ final class HighlightOverlays {
                         }
                         let key = SourceIdentity.documentID(bundleID: target.bundleID, title: target.title, url: target.url)
                         let quotes = model.library.highlights.filter { $0.documentID == key }.map(\.quote)
-                        let ownsPage = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes) {
+                        let paint = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes) {
                             self.generation == revision && self.viewportRevision == viewport
                         }
                         guard generation == revision else { continue }
-                        browserOwnsPage = ownsPage
-                        if ownsPage || quotes.isEmpty {
+                        browserNeedsRetry = paint == .deferred
+                        browserOwnsPage = paint != .unsupported
+                        if browserOwnsPage || quotes.isEmpty {
                             tracked = nil
                             window.orderOut(nil)
                             continue

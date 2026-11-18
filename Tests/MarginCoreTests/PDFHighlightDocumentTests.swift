@@ -1,10 +1,30 @@
 import AppKit
 import CoreText
+import JavaScriptCore
 import PDFKit
 import XCTest
 @testable import Margin
 
 final class PDFHighlightDocumentTests: XCTestCase {
+    @MainActor
+    func testDeletionWaitsForConfirmationFromTheVisiblePDF() async throws {
+        let painter = ChromePDFHighlights()
+        let paper = try XCTUnwrap(URL(string: "https://arxiv.org/pdf/2506.01844"))
+        var status = "different"
+        func reconcile() async throws -> BrowserHighlightState {
+            try await painter.paint(paper: paper, quotes: [], isCurrent: { true }) { request, _ in
+                XCTAssertEqual(request["action"] as? String, "status")
+                return status
+            } position: { _ in nil }
+        }
+
+        let waiting = try await reconcile()
+        XCTAssertEqual(waiting, .deferred)
+        status = "active"
+        let confirmed = try await reconcile()
+        XCTAssertEqual(confirmed, .current)
+    }
+
     func testReadingPositionRequiresAgreementAcrossLines() {
         let original: [String: CGRect] = [
             "heading": CGRect(x: 90, y: 100, width: 130, height: 20),
@@ -33,11 +53,30 @@ final class PDFHighlightDocumentTests: XCTestCase {
                 let attributed = NSAttributedString(string: line, attributes: [.font: NSFont.systemFont(ofSize: 14)])
                 CTLineDraw(CTLineCreateWithAttributedString(attributed), context)
             }
+            if lines.count > 1 {
+                context.setURL(URL(string: "https://arxiv.org")! as CFURL, for: CGRect(x: 30, y: 310, width: 75, height: 18))
+            }
             context.endPDFPage()
         }
         context.closePDF()
         let original = data as Data
-        XCTAssertEqual(PDFHighlightDocument.annotated(original, quotes: ["repeated", "missing"]), original)
+        XCTAssertEqual(PDFHighlightDocument.annotationUpdate(for: original, quotes: ["repeated", "missing"]), Data())
+
+        // Exercise a compressed cross-reference stream as well as CoreGraphics' classic table.
+        let js = try XCTUnwrap(JSContext())
+        js.evaluateScript(try XCTUnwrap(MarginResources.script("pdf-lib.min", in: "PDFWriter")))
+        js.setObject(original.base64EncodedString(), forKeyedSubscript: "source" as NSString)
+        js.evaluateScript("""
+            var compressed;
+            PDFLib.PDFDocument.load(source, {parseSpeed: Infinity}).then(document =>
+                document.saveAsBase64({useObjectStreams: true, objectsPerTick: Infinity})
+            ).then(bytes => { compressed = bytes });
+            """)
+        let encoded = try XCTUnwrap(js.objectForKeyedSubscript("compressed")?.toString())
+        let compressed = try XCTUnwrap(Data(base64Encoded: encoded))
+        let update = try XCTUnwrap(PDFHighlightDocument.annotationUpdate(for: compressed, quotes: ["first line"]))
+        let compressedPage = try XCTUnwrap(PDFDocument(data: compressed + update)?.page(at: 0))
+        XCTAssertEqual(compressedPage.annotations.filter { $0.type == "Highlight" }.count, 1)
 
         let form = try XCTUnwrap(PDFDocument(data: original))
         let field = PDFAnnotation(bounds: CGRect(x: 30, y: 60, width: 180, height: 24),
@@ -46,15 +85,16 @@ final class PDFHighlightDocumentTests: XCTestCase {
         field.fieldName = "Reader notes"
         try XCTUnwrap(form.page(at: 0)).addAnnotation(field)
         let formBytes = try XCTUnwrap(form.dataRepresentation())
-        XCTAssertNil(PDFHighlightDocument.annotated(formBytes, quotes: ["first line"]))
-        XCTAssertNil(PDFHighlightDocument.annotated(formBytes, quotes: []))
+        XCTAssertNil(PDFHighlightDocument.annotationUpdate(for: formBytes, quotes: ["first line"]))
+        XCTAssertNil(PDFHighlightDocument.annotationUpdate(for: formBytes, quotes: []))
 
-        let result = try XCTUnwrap(PDFHighlightDocument.annotated(original, quotes: ["first line next line", "repeated"]))
+        let result = original + (try XCTUnwrap(PDFHighlightDocument.annotationUpdate(for: original, quotes: ["first line next line", "repeated"])))
         let document = try XCTUnwrap(PDFDocument(data: result))
         let page = try XCTUnwrap(document.page(at: 0))
-        XCTAssertEqual(page.annotations.count, 1)
+        XCTAssertEqual(page.annotations.count, 2)
+        XCTAssertEqual(page.annotations.first(where: { $0.type == "Link" })?.url?.host, "arxiv.org")
         XCTAssertEqual(document.page(at: 1)?.annotations.count, 0)
-        let annotation = try XCTUnwrap(page.annotations.first)
+        let annotation = try XCTUnwrap(page.annotations.first(where: { $0.type == "Highlight" }))
         let points = try XCTUnwrap(annotation.quadrilateralPoints)
         XCTAssertEqual(points.count, 8)
         guard points.count == 8 else { return }

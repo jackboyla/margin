@@ -8,7 +8,7 @@ let package = Package(
     targets: [
         .target(name: "MarginCore", linkerSettings: [.linkedLibrary("sqlite3")]),
         .executableTarget(name: "Margin", dependencies: ["MarginCore"],
-                          resources: [.copy("Resources/BrowserHighlights.js"), .copy("Resources/PDFViewport.js")]),
+                          resources: [.copy("Resources/BrowserHighlights.js"), .copy("Resources/PDFViewport.js"), .copy("Resources/PDFWriter")]),
         .testTarget(name: "MarginCoreTests", dependencies: ["MarginCore", "Margin"]),
     ],
     swiftLanguageModes: [.v5]

@@ -1,11 +1,23 @@
 import CoreGraphics
 import CryptoKit
 import Foundation
+import os
+
+enum BrowserHighlightState {
+    case current, deferred, unsupported
+}
 
 @MainActor
 final class ChromePDFHighlights {
-    private var original: (url: URL, bytes: Data)?
-    private(set) var awaitingClear = false
+    private struct OriginalPDF {
+        let url: URL
+        let bytes: Data
+        let id: String
+    }
+    private var original: OriginalPDF?
+    private var lastPlacement: (paper: URL, position: PDFReadingPosition, zoom: Double, left: Double, top: Double)?
+    private let log = Logger(subsystem: "com.jackboylan.margin", category: "BrowserHighlights")
+    private var unpaintableToken: String?
     private var retry: (token: String, after: Date)?
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -26,7 +38,7 @@ final class ChromePDFHighlights {
 
     func paint(paper: URL, quotes: [String], isCurrent: @MainActor () -> Bool,
                command: ([String: Any], PDFInputSnapshot?) async throws -> String,
-               position: (PDFReadingPosition?) async throws -> PDFReadingPosition?) async throws -> Bool {
+               position: (PDFReadingPosition?) async throws -> PDFReadingPosition?) async throws -> BrowserHighlightState {
         let key = try JSONEncoder().encode([paper.absoluteString] + quotes.sorted())
         let token = Data(SHA256.hash(data: key)).base64EncodedString()
         func send(_ action: String, _ fields: [String: Any] = [:], input: PDFInputSnapshot? = nil) async throws -> String {
@@ -36,56 +48,93 @@ final class ChromePDFHighlights {
             return try await command(request, input)
         }
         let status = try await send("status")
-        if quotes.isEmpty { awaitingClear = status != "active" && status != "original" }
-        if status == "active" || (status == "original" && quotes.isEmpty) { return true }
-        guard ["original", "different", "pending", "ready", "failed"].contains(status) else { return false }
-        // On a supported PDF, keep the visible paper while a new copy loads or position is uncertain.
-        guard isCurrent(), retry?.token != token || (retry?.after ?? .distantPast) < Date() else { return true }
-        if status == "pending" || status == "ready" || status == "failed" {
-            _ = try await send("cancel")
+        if status == "active" || (status == "original" && quotes.isEmpty) {
+            return .current
         }
-        retry = (token, Date().addingTimeInterval(8))
-        guard let source = try await position(nil), isCurrent() else { return true }
-        let bytes: Data
+        if status == "notPDF" { return .unsupported }
+        if status == "original", token == unpaintableToken { return .current }
+        guard ["original", "different", "pending", "ready", "failed"].contains(status) else {
+            return lastPlacement?.paper == paper ? .deferred : .unsupported
+        }
+        guard isCurrent(), retry?.token != token || (retry?.after ?? .distantPast) < Date() else { return .deferred }
+        if ["pending", "ready", "failed"].contains(status) { _ = try await send("cancel") }
+        func deferPaint(_ reason: String, delay: TimeInterval = 1) -> BrowserHighlightState {
+            log.info("Deferred PDF highlight reconciliation: \(reason, privacy: .public)")
+            retry = (token, Date().addingTimeInterval(delay))
+            return .deferred
+        }
+        guard let source = try await position(nil), isCurrent() else {
+            return deferPaint("source position unavailable", delay: 2)
+        }
+        let base: OriginalPDF
         do {
-            bytes = try await originalBytes(for: paper)
+            base = try await originalPDF(for: paper)
         } catch {
-            return true
+            return deferPaint("paper download unavailable", delay: 8)
         }
-        let marked = await Task.detached(priority: .utility) {
-            PDFHighlightDocument.annotated(bytes, quotes: quotes)
+        let update = await Task.detached(priority: .utility) {
+            PDFHighlightDocument.annotationUpdate(for: base.bytes, quotes: quotes)
         }.value
-        guard let marked, isCurrent() else { return true }
-        if marked == bytes && status == "original" {
-            retry = (token, .distantFuture)
-            return true
+        guard isCurrent() else { return .deferred }
+        if status == "original", update?.isEmpty != false {
+            // Missing quotes and PDFs with editable forms must stay in the original viewer.
+            unpaintableToken = token
+            return .current
         }
+        guard let update else { return deferPaint("PDF annotation update unavailable", delay: 8) }
 
         var zoom = 100.0
         var left = 0.0
         var top = 0.0
+        // Edits on the same visible page usually need the last verified offsets again.
+        if let last = lastPlacement, last.paper == paper, source.sharesViewer(with: last.position),
+           source.pageNumber == last.position.pageNumber, source.zoomPercent == last.position.zoomPercent {
+            zoom = last.zoom
+            left = last.left
+            top = last.top
+        }
+        var reason = "reader moved"
         do {
             for attempt in 0..<4 {
                 guard isCurrent() else { break }
                 var fields: [String: Any] = ["page": source.pageNumber, "zoom": zoom, "left": left, "top": top]
-                if attempt == 0 { fields["bytes"] = marked.base64EncodedString() }
-                var state = try await send("stage", fields)
-                var candidate: PDFReadingPosition?
-                let deadline = Date().addingTimeInterval(4)
-                while isCurrent(), candidate == nil, Date() < deadline, ["pending", "ready"].contains(state) {
-                    if state == "ready" { candidate = try await position(source) }
-                    if candidate == nil {
-                        try await Task.sleep(for: .milliseconds(100))
-                        state = try await send("status")
-                    }
+                if attempt == 0 {
+                    fields["sourceID"] = base.id
+                    fields["append"] = update.base64EncodedString()
                 }
-                guard let candidate, isCurrent() else { break }
+                var state = try await send("stage", fields)
+                if state == "sourceNeeded" && attempt == 0 {
+                    fields["sourceBytes"] = base.bytes.base64EncodedString()
+                    state = try await send("stage", fields)
+                }
+                let deadline = Date().addingTimeInterval(8)
+                var candidate: PDFReadingPosition?
+                var displacement: CGSize?
+                // The PDF wrapper loads before Chrome publishes the requested page and its text bounds.
+                while isCurrent(), Date() < deadline, ["pending", "ready"].contains(state) {
+                    if state == "ready", let sample = try await position(source), sample.pageNumber == source.pageNumber {
+                        if sample.zoomPercent != source.zoomPercent {
+                            candidate = sample
+                            break
+                        }
+                        if let delta = sample.displacement(from: source) {
+                            candidate = sample
+                            displacement = delta
+                            break
+                        }
+                    }
+                    try await Task.sleep(for: .milliseconds(100))
+                    state = try await send("status")
+                }
+                guard let candidate, isCurrent() else {
+                    reason = "staged page did not provide matching landmarks"
+                    break
+                }
                 if candidate.zoomPercent != source.zoomPercent {
                     zoom *= Double(source.zoomPercent) / Double(candidate.zoomPercent)
                     continue
                 }
-                guard candidate.pageNumber == source.pageNumber,
-                      let delta = candidate.displacement(from: source) else { break }
+                guard let delta = displacement else { break }
                 if abs(delta.width) <= 1, abs(delta.height) <= 1 {
                     let input = PDFInputSnapshot()
                     let stillAligned = await Task.detached(priority: .userInitiated) {
@@ -93,27 +142,34 @@ final class ChromePDFHighlights {
                               let difference = staged.displacement(from: original) else { return false }
                         return abs(difference.width) <= 1 && abs(difference.height) <= 1
                     }.value
-                    if stillAligned, isCurrent(), try await send("commit", input: input) == "active" {
-                        if quotes.isEmpty { awaitingClear = false }
-                        retry = nil
-                        return true
+                    guard stillAligned, isCurrent() else {
+                        reason = "position changed before display"
+                        break
                     }
+                    let receipt = try await send("commit", input: input)
+                    if receipt == "active" {
+                        lastPlacement = (paper, candidate, zoom, left, top)
+                        retry = nil
+                        return .current
+                    }
+                    reason = "browser did not confirm the switch"
                     break
                 }
                 let scale = Double(candidate.zoomPercent) / 100
                 left += delta.width / scale
                 top += delta.height / scale
+                reason = "viewport offsets did not converge"
             }
         } catch {
             _ = try? await send("cancel")
             throw error
         }
         _ = try await send("cancel")
-        return true
+        return deferPaint(reason)
     }
 
-    private func originalBytes(for url: URL) async throws -> Data {
-        if let original, original.url == url { return original.bytes }
+    private func originalPDF(for url: URL) async throws -> OriginalPDF {
+        if let original, original.url == url { return original }
         let (file, response) = try await session.download(from: url)
         defer { try? FileManager.default.removeItem(at: file) }
         guard let http = response as? HTTPURLResponse, http.statusCode == 200, http.url == url,
@@ -121,8 +177,9 @@ final class ChromePDFHighlights {
               let size = try file.resourceValues(forKeys: [.fileSizeKey]).fileSize,
               size > 0, size <= 64 * 1024 * 1024 else { throw URLError(.cannotDecodeContentData) }
         let bytes = try Data(contentsOf: file)
-        original = (url, bytes)
-        return bytes
+        let result = OriginalPDF(url: url, bytes: bytes, id: Data(SHA256.hash(data: bytes)).base64EncodedString())
+        original = result
+        return result
     }
 }
 

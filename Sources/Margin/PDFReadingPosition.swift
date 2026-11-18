@@ -22,6 +22,8 @@ struct PDFReadingPosition {
         return read(viewers[0])
     }
 
+    func sharesViewer(with other: Self) -> Bool { CFEqual(viewer, other.viewer) }
+
     func refreshed() -> Self? { Self.read(viewer) }
 
     /// Positive offsets mean the candidate's text lies farther right or down.

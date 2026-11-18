@@ -144,29 +144,16 @@ final class WindowCapture {
 
     private nonisolated static let highlightLog = Logger(subsystem: "com.jackboylan.margin", category: "BrowserHighlights")
 
-    private nonisolated static func resourceScript(_ name: String) -> String? {
-        let bundle: Bundle?
-        if Bundle.main.bundleURL.pathExtension == "app" {
-            bundle = Bundle.main.url(forResource: "Margin_Margin", withExtension: "bundle").flatMap(Bundle.init(url:))
-        } else {
-            bundle = Bundle.module
-        }
-        guard let file = bundle?.url(forResource: name, withExtension: "js") else { return nil }
-        return try? String(contentsOf: file, encoding: .utf8)
-    }
-
-    private nonisolated static let browserHighlightScript = resourceScript("BrowserHighlights")
-    private nonisolated static let pdfViewportScript = resourceScript("PDFViewport")
+    private nonisolated static let browserHighlightScript = MarginResources.script("BrowserHighlights")
+    private nonisolated static let pdfViewportScript = MarginResources.script("PDFViewport")
     private let pdfRenderer = ChromePDFHighlights()
 
-    var awaitingPDFClear: Bool { pdfRenderer.awaitingClear }
-
     func paintBrowserHighlights(target: WindowTarget, quotes: [String],
-                                isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool {
-        guard isChromiumBrowser(target.bundleID), let url = target.url else { return false }
+                                isCurrent: @escaping @MainActor () -> Bool) async throws -> BrowserHighlightState {
+        guard isChromiumBrowser(target.bundleID), let url = target.url else { return .unsupported }
         if let paper = ChromePDFHighlights.paperURL(url) {
-            guard let template = Self.pdfViewportScript else { return false }
-            return try await pdfRenderer.paint(paper: paper, quotes: quotes, isCurrent: isCurrent) { arguments, input in
+            guard let template = Self.pdfViewportScript else { return .unsupported }
+            let paint = try await pdfRenderer.paint(paper: paper, quotes: quotes, isCurrent: isCurrent) { arguments, input in
                 var request = arguments
                 request["url"] = url
                 return try await self.browserCommand(target, template: template, request: request, input: input)
@@ -178,9 +165,10 @@ final class WindowCapture {
                     return PDFReadingPosition.current(in: win, excluding: excluding)
                 }.value
             }
+            if paint != .unsupported { return paint }
         }
-        guard let template = Self.browserHighlightScript else { return false }
-        return try await browserCommand(target, template: template, request: ["url": url, "quotes": quotes]) == "owned"
+        guard let template = Self.browserHighlightScript else { return .unsupported }
+        return try await browserCommand(target, template: template, request: ["url": url, "quotes": quotes]) == "owned" ? .current : .unsupported
     }
 
     private func browserCommand(_ target: WindowTarget, template: String, request: [String: Any], input: PDFInputSnapshot? = nil) async throws -> String {
