@@ -271,8 +271,19 @@ test('saving PDF highlights preserves the visible text, zoom and reading positio
   }
 
   const initial = await atPosition(null, 0);
+  const originalViewer = page.frames().find(frame => frame.url().startsWith('chrome-extension://'));
+  const readingPosition = () => originalViewer.evaluate(() => {
+    const viewport = document.querySelector('pdf-viewer').viewport;
+    return [viewport.getMostVisiblePage(), viewport.getZoom(), viewport.position.x, viewport.position.y];
+  });
+  const start = await readingPosition();
+  await stage('abandoned', 0, [7]);
+  assert.equal(await run('cancel', 'abandoned'), 'original');
+  assert.equal(await page.getByTitle('Margin PDF staging').count(), 0);
+  assert.equal(await page.evaluate(() => document.body.inert), false);
   await stage('first', 0, [7]);
-  assert.deepEqual(await pixels(), initial);
+  assert.deepEqual(await readingPosition(), start);
+  await atPosition(initial, 0);
   await stage('first', 180);
   assert.equal(await run('commit', 'first'), 'active');
   const first = await atPosition(initial, 1);

@@ -39,11 +39,11 @@
     next.frame.removeAttribute("tabindex");
     next.frame.style.opacity = "1";
     next.frame.style.pointerEvents = "auto";
-    // Chrome exposes its original PDF in the body. Only the visible viewer should accept selection.
-    document.body.inert = true;
-    remove(state.active);
+    const previous = state.active;
+    (previous?.frame ?? document.body).inert = true;
     state.active = next;
     state.pending = null;
+    requestAnimationFrame(() => requestAnimationFrame(() => remove(previous)));
     return reply("active");
   }
   if (request.action !== "stage") return reply("failed");
@@ -83,8 +83,8 @@
   const frame = document.createElement("iframe");
   frame.title = "Margin PDF staging";
   frame.tabIndex = -1;
-  // Zero opacity keeps the candidate measurable through Accessibility while the reader uses the current PDF.
-  frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;opacity:0;pointer-events:none";
+  // Chrome can skip painting a fully transparent PDF. Give the replacement a composited layer before revealing it.
+  frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;will-change:opacity;opacity:0.001;pointer-events:none";
   const candidate = { token, blob, frame, fragment, status: "pending" };
   state.pending = candidate;
   function fail() {
@@ -99,7 +99,10 @@
     try {
       if (frame.contentDocument?.contentType === "application/pdf" &&
           frame.contentDocument.URL.split("#")[0] === blob) {
-        candidate.status = "ready";
+        // The wrapper loads before Chrome draws the paper tiles at the requested zoom.
+        setTimeout(() => {
+          if (state.pending === candidate && candidate.status === "pending") candidate.status = "ready";
+        }, 350);
         return;
       }
     } catch {}
