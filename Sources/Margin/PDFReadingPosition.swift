@@ -18,7 +18,7 @@ struct PDFReadingPosition {
                 return false
             }
             return true
-        }), viewers.count == 1 else { return nil }
+        }), viewers.count == 1 else { print("AX-DIAG viewer count", viewers.count); return nil }
         return read(viewers[0])
     }
 
@@ -52,9 +52,19 @@ struct PDFReadingPosition {
         var pageNumbers: [Int] = [], zoomLevels: [Int] = []
         var pages: [Int: AXUIElement] = [:]
         var duplicatePage = false
-        guard walk(viewer, reading: [kAXTitleAttribute, kAXValueAttribute], visit: { node, attributes in
+        var editControls: [String: Bool] = [:]
+        guard walk(viewer, reading: [kAXTitleAttribute, kAXValueAttribute, kAXEnabledAttribute], visit: { node, attributes in
             let role = attributes[0] as? String
             let title = attributes[2] as? String ?? ""
+            // Chrome keeps its undo history after the drawing toolbar closes.
+            if ["Draw", "Add text annotations"].contains(title), role == kAXCheckBoxRole || role == kAXButtonRole {
+                let inactive = (attributes[3] as? NSNumber)?.intValue == 0
+                editControls[title] = (editControls[title] ?? true) && inactive
+            }
+            if ["Undo", "Redo"].contains(title), role == kAXButtonRole {
+                let disabled = (attributes[4] as? NSNumber)?.boolValue == false
+                editControls[title] = (editControls[title] ?? true) && disabled
+            }
             if role == kAXTextFieldRole, let value = attributes[3] as? String {
                 if title == "Page number", let number = Int(value), number > 0 { pageNumbers.append(number) }
                 if title == "Zoom level", value.hasSuffix("%"), let zoom = Int(value.dropLast()), zoom > 0 {
@@ -66,8 +76,10 @@ struct PDFReadingPosition {
                 return false
             }
             return true
-        }), !duplicatePage, pageNumbers.count == 1, zoomLevels.count == 1,
-              let page = pages[pageNumbers[0]] else { return nil }
+        }), !duplicatePage, editControls["Draw"] == true, editControls["Undo"] == true,
+              editControls["Redo"] == true, editControls["Add text annotations"] != false,
+              pageNumbers.count == 1, zoomLevels.count == 1,
+              let page = pages[pageNumbers[0]] else { print("AX-DIAG controls",duplicatePage, pageNumbers,zoomLevels,pages.keys.sorted(),editControls); return nil }
 
         var lines: [String: CGRect] = [:]
         var seen: Set<String> = []
@@ -91,7 +103,7 @@ struct PDFReadingPosition {
                 start = end
             }
             return false
-        }), lines.count >= 2 else { return nil }
+        }), lines.count >= 2 else { print("AX-DIAG lines", lines.count); return nil }
         return Self(pageNumber: pageNumbers[0], zoomPercent: zoomLevels[0], viewer: viewer, lines: lines)
     }
 
@@ -115,15 +127,15 @@ struct PDFReadingPosition {
         var index = 0
         let deadline = ProcessInfo.processInfo.systemUptime + 2
         while index < queue.count {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { return false }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { print("AX-DIAG timeout",index,queue.count); return false }
             let node = queue[index]
             index += 1
             var result: CFArray?
             AXUIElementSetMessagingTimeout(node, 0.1)
             guard AXUIElementCopyMultipleAttributeValues(node, names as CFArray, [], &result) == .success,
-                  let attributes = result as? [Any], attributes.count == names.count else { return false }
+                  let attributes = result as? [Any], attributes.count == names.count else { print("AX-DIAG bulk",index,queue.count,String(describing:result)); return false }
             if visit(node, attributes), let children = attributes[1] as? [AXUIElement] {
-                guard queue.count + children.count <= 3000 else { return false }
+                guard queue.count + children.count <= 3000 else { print("AX-DIAG too many",queue.count); return false }
                 queue.append(contentsOf: children)
             }
         }

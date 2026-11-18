@@ -28,6 +28,29 @@ final class HostedPDFInteraction: XCTestCase {
             }
             throw URLError(.timedOut)
         }
+        
+        let fields = [kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, "AXURL", kAXEnabledAttribute, kAXChildrenAttribute]
+        var queue: [(AXUIElement,Int)] = [(window,0)]
+        var idx=0
+        var rows:[String]=[]
+        while idx < queue.count && idx < 4000 {
+            let (node,depth)=queue[idx];idx += 1
+            var values:CFArray?
+            let status=AXUIElementCopyMultipleAttributeValues(node,fields as CFArray,[],&values)
+            guard let a=values as? [Any],a.count==6 else{
+                rows.append("depth=\(depth) error=\(status.rawValue)");continue
+            }
+            let row=a.prefix(5).map { item -> String in
+                if let u=item as? URL { return u.absoluteString }
+                if let n=item as? NSNumber { return n.stringValue }
+                if let s=item as? String { return String(s.prefix(150)).replacingOccurrences(of:"\n",with:" ") }
+                return "—"
+            }.joined(separator:" | ")
+            rows.append(String(repeating:" ",count:depth)+row)
+            if let kids=a[5] as? [AXUIElement] { queue += kids.map { ($0,depth+1) } }
+        }
+        if let tmp = env["RUNNER_TEMP"] { try rows.joined(separator:"\n").write(toFile:tmp+"/margin-evidence/ax-tree.txt",atomically:true,encoding:.utf8) }
+        print("AX-DIAG snapshot",rows.count,rows.filter { $0.contains("AXWebArea") || $0.contains("Page number") || $0.contains("Zoom level") }.prefix(10))
         let before = try XCTUnwrap(PDFReadingPosition.current(in: window))
         print("API-TRACE baseline", before.pageNumber, before.zoomPercent)
         XCTAssertEqual(before.pageNumber, 4)
