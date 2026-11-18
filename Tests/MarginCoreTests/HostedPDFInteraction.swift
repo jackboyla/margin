@@ -28,7 +28,7 @@ final class HostedPDFInteraction: XCTestCase {
             }
             throw URLError(.timedOut)
         }
-        
+
         let fields = [kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, "AXURL", kAXEnabledAttribute, kAXChildrenAttribute]
         var queue: [(AXUIElement,Int)] = [(window,0)]
         var idx=0

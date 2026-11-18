@@ -16,7 +16,11 @@ try {
   console.log('HTTP',response.status(),await response.headerValue('content-type'),await p.evaluate(()=>document.contentType));
   if(response.status()!==200||await p.evaluate(()=>document.contentType)!=='application/pdf') throw Error('paper unavailable');
   await delay(3500);
-  await p.screenshot({path:dir+'/before.png'});
+  async function snapshot(name) {
+    try {await p.screenshot({path:dir+'/'+name+'.png',timeout:4500})}
+    catch (error) { console.warn('Chrome screenshot:',String(error));const cp=spawn('/usr/sbin/screencapture',['-x',dir+'/'+name+'-desktop.png'],{stdio:'inherit'});await once(cp,'exit'); }
+  }
+  await snapshot('before');
   child=spawn('swift',['test','--skip-build','--filter','HostedPDFInteraction'],{stdio:'inherit',env:{...process.env,MARGIN_HOSTED_INTERACTION:'1',MARGIN_IPC:ipc}});
   let completed=false;
   const completion=once(child,'exit').then(([code])=>{completed=true; return code;});
@@ -29,7 +33,7 @@ try {
     let reply;
     if(request.action==='evidence') {
       await delay(350);
-      await p.screenshot({path:dir+'/after-'+request.step+'.png'});
+      await snapshot('after-'+request.step);
       reply=await p.evaluate(()=>document.querySelector('iframe[title="PDF with saved highlights"]')?.src??'');
       console.log('active',request.step,reply);
     } else {
