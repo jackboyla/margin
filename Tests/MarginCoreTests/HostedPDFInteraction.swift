@@ -45,7 +45,8 @@ final class HostedPDFInteraction: XCTestCase {
         var queue: [(AXUIElement,Int)] = [(window,0)]
         var idx=0
         var rows:[String]=[]
-        while idx < queue.count && idx < 4000 {
+        let scanDeadline = Date().addingTimeInterval(15)
+        while idx < queue.count && idx < 2200 && Date()<scanDeadline {
             let (node,depth)=queue[idx];idx += 1
             var values:CFArray?
             let status=AXUIElementCopyMultipleAttributeValues(node,fields as CFArray,[],&values)
@@ -59,7 +60,10 @@ final class HostedPDFInteraction: XCTestCase {
                 return "—"
             }.joined(separator:" | ")
             rows.append(String(repeating:" ",count:depth)+row)
-            if let kids=a[5] as? [AXUIElement] { queue += kids.map { ($0,depth+1) } }
+            let title = a[1] as? String ?? ""
+            if !(title.hasPrefix("Page ") && title != "Page 4"), let kids=a[5] as? [AXUIElement] {
+                queue += kids.map { ($0,depth+1) }
+            }
         }
         if let tmp = env["RUNNER_TEMP"] { try rows.joined(separator:"\n").write(toFile:tmp+"/margin-evidence/ax-tree-"+(env["MARGIN_AX_ONLY"] ?? "web")+".txt",atomically:true,encoding:.utf8) }
         print("AX-DIAG snapshot",rows.count,rows.filter { $0.contains("AXWebArea") || $0.contains("Page number") || $0.contains("Zoom level") }.prefix(10))

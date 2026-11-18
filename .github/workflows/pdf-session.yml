@@ -23,7 +23,9 @@ jobs:
           done
           test "$(head -c 4 "$RUNNER_TEMP/smolvla.pdf")" = '%PDF'
           shasum -a 256 "$RUNNER_TEMP/smolvla.pdf"
-      - run: node scripts/hosted-pdf-session.mjs
+      - name: Exercise public Chrome and native accessibility
+        timeout-minutes: 5
+        run: node scripts/hosted-pdf-session.mjs
       - if: always()
         uses: actions/upload-artifact@v7
         with:

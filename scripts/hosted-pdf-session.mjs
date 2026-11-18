@@ -14,17 +14,31 @@ await mkdir(profile+'/Default',{recursive:true});
 await writeFile(profile+'/Default/Preferences',JSON.stringify({browser:{allow_javascript_apple_events:true}}));
 const local=pathToFileURL(process.env.RUNNER_TEMP+'/smolvla.pdf').href+'#page=4&zoom=150,0,298';
 const args=['-na','Google Chrome','--args','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'--window-size=1300,850',local];
-await once(spawn('/usr/bin/open',args,{stdio:'inherit'}),'exit');
+const trace = async msg => {
+  console.log(msg);
+  const { appendFile }=await import('node:fs/promises');
+  await appendFile(dir+'/phases.txt',new Date().toISOString()+' '+msg+'\n');
+};
+await trace('launching system Chrome');
+const opener=spawn('/usr/bin/open',args,{stdio:'inherit'});
+await Promise.race([once(opener,'exit'),delay(10000)]);
+await trace('requested Chrome launch');
 await delay(4500);
-const base=spawn('swift',['test','--skip-build','--filter','HostedPDFInteraction'],{stdio:'inherit',env:{...process.env,MARGIN_HOSTED_INTERACTION:'1',MARGIN_IPC:ipc,MARGIN_AX_ONLY:'1'}});
-console.log('Local PDF AX exit',await once(base,'exit'));
+await trace('starting standalone AX measurement');
+const base=spawn('swift',['test','--skip-build','--filter','HostedPDFInteraction'],{detached:true,stdio:'inherit',env:{...process.env,MARGIN_HOSTED_INTERACTION:'1',MARGIN_IPC:ipc,MARGIN_AX_ONLY:'1'}});
+const baseTimer=setTimeout(()=>{try{process.kill(-base.pid,'SIGTERM')}catch{}},60000);
+const localExit=await once(base,'exit');clearTimeout(baseTimer);
+await trace('standalone AX exit '+localExit);
+
 const [port]=String(await readFile(profile+'/DevToolsActivePort')).split('\n');
-const browser=await chromium.connectOverCDP('http://127.0.0.1:'+port);
+const browser=await chromium.connectOverCDP('http://127.0.0.1:'+port,{timeout:12000});
+await trace('attached Chrome');
 let child;
 try {
   const context=browser.contexts()[0];
   const p=context.pages()[0]; await p.bringToFront();
   await p.route('https://arxiv.org/pdf/2506.01844',r=>r.fulfill({path:process.env.RUNNER_TEMP+'/smolvla.pdf',contentType:'application/pdf'}));
+  await trace('opening original HTTPS address');
   const response=await p.goto(url,{timeout:30000,waitUntil:'commit'});
   console.log('HTTP',response.status(),await response.headerValue('content-type'),await p.evaluate(()=>document.contentType));
   if(response.status()!==200||await p.evaluate(()=>document.contentType)!=='application/pdf') throw Error('paper unavailable');
@@ -36,6 +50,7 @@ try {
   }
   const initialSnapshot=snapshot('before');
   child=spawn('swift',['test','--skip-build','--filter','HostedPDFInteraction'],{stdio:'inherit',env:{...process.env,MARGIN_HOSTED_INTERACTION:'1',MARGIN_IPC:ipc}});
+  await trace('started native painting');
   await initialSnapshot;
   let completed=false;
   const completion=once(child,'exit').then(([code])=>{completed=true; return code;});
