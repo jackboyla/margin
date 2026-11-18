@@ -66,7 +66,12 @@ try {
     const request=JSON.parse(content);
     let reply;
     if(p.url()!==url) throw Error('top-level document changed: '+p.url());
-    if(request.action==='interaction') {
+    if(request.action==='reset') {
+      await p.reload({waitUntil:'commit'});
+      await p.bringToFront();
+      await delay(4000);
+      reply='ok';
+    } else if(request.action==='interaction') {
       if(request.step===1) {
         await p.mouse.click(390,210);
         await p.mouse.move(690,290);
@@ -78,7 +83,36 @@ try {
     } else if(request.action==='evidence') {
       await delay(350);
       await snapshot('after-'+request.step);
-      reply=await p.evaluate(()=>document.querySelector('iframe[title="PDF with saved highlights"]')?.src??'');
+      reply=await p.evaluate(()=>{
+        const active=[...document.querySelectorAll('iframe[title="PDF with saved highlights"]')].filter(f=>f.isConnected&&getComputedStyle(f).opacity==='1');
+        return active.length===1?active[0].src:'';
+      });
+      if(request.step===0 && reply){
+        const files=await Promise.all([dir+'/before-0.png',dir+'/after-0.png'].map(async f=>(await readFile(f)).toString('base64')));
+        const diff=await p.evaluate(async images=>{
+          async function frame(data){
+            const image=new Image();image.src='data:image/png;base64,'+data;await image.decode();
+            const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
+            const d=canvas.getContext('2d');d.drawImage(image,0,0);
+            return d.getImageData(330,205,image.width-360,image.height-310);
+          }
+          const [a,b]=await Promise.all(images.map(frame));let minY=a.height,maxY=-1,changed=0,yellow=0;
+          const rows=Array(a.height).fill(0);
+          for(let i=0;i<a.data.length;i+=4){
+            const y=Math.floor(i/4/a.width);
+            if(a.data[i]!==b.data[i]||a.data[i+1]!==b.data[i+1]||a.data[i+2]!==b.data[i+2]){
+              rows[y]++;changed++;
+              if(b.data[i]>175 && b.data[i+1]>145 && b.data[i+2]+35<b.data[i+1]){
+                minY=Math.min(minY,y);maxY=Math.max(maxY,y);yellow++;
+              }
+            }
+          }
+          const outside=rows.reduce((n,v,y)=>n+((y<minY-2||y>maxY+2)?v:0),0);
+          return {minY,maxY,changed,yellow,outside};
+        },files);
+        console.log('FIRST MARK PIXELS',diff);await writeFile(dir+'/pixel-report.json',JSON.stringify(diff));
+        if(diff.outside>0){const {copyFile}=await import('node:fs/promises');await copyFile(process.env.RUNNER_TEMP+'/margin-native-annotated.pdf',dir+'/first-staged.pdf')}
+      }
       console.log('active',request.step,reply);
     } else {
       const result=await p.evaluate(source.replace('__MARGIN_REQUEST__',()=>JSON.stringify({...request,url})));

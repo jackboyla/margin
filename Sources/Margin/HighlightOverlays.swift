@@ -72,7 +72,7 @@ final class HighlightOverlays {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
-                if self.model?.library.highlights.isEmpty == false,
+                if self.model?.library.highlights.isEmpty == false || self.model?.capture.awaitingPDFClear == true,
                    let target = try? self.model?.capture.currentTarget(),
                    self.model?.capture.isChromiumBrowser(target.bundleID) == true {
                     self.needsPageCheck = true

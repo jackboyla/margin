@@ -5,11 +5,17 @@ import PDFKit
 enum PDFHighlightDocument {
     /// Rebuild from the original bytes so removing a saved passage also removes its markup.
     static func annotated(_ original: Data, quotes: [String]) -> Data? {
-        guard let document = PDFDocument(data: original), !document.isLocked else { return nil }
-        guard !quotes.isEmpty else { return original }
+        guard let document = PDFDocument(data: original), !document.isLocked,
+              let catalog = document.documentRef?.catalog else { return nil }
+        // Form values belong to the live viewer and may differ from the downloaded file.
+        var form: CGPDFObjectRef?
+        guard !CGPDFDictionaryGetObject(catalog, "AcroForm", &form) else { return nil }
 
         let pages = (0..<document.pageCount).compactMap { document.page(at: $0) }
-        guard pages.count == document.pageCount else { return nil }
+        guard pages.count == document.pageCount,
+              !pages.contains(where: { $0.annotations.contains(where: { $0.type == "Widget" }) })
+        else { return nil }
+        guard !quotes.isEmpty else { return original }
         let text = pages.map { $0.string ?? "" }
         var modified = false
 

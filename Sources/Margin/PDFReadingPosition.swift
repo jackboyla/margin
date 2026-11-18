@@ -18,7 +18,7 @@ struct PDFReadingPosition {
                 return false
             }
             return true
-        }), viewers.count == 1 else { print("AX-DIAG viewer count", viewers.count); return nil }
+        }), viewers.count == 1 else { return nil }
         return read(viewers[0])
     }
 
@@ -27,32 +27,26 @@ struct PDFReadingPosition {
     /// Positive offsets mean the candidate's text lies farther right or down.
     func displacement(from original: Self) -> CGSize? {
         guard pageNumber == original.pageNumber, zoomPercent == original.zoomPercent else { return nil }
-        if let dir=ProcessInfo.processInfo.environment["RUNNER_TEMP"] {
-            struct Record:Codable { let line:String; let source:CGRect?; let candidate:CGRect? }
-            let keys=Set(lines.keys).union(original.lines.keys).sorted()
-            let records=keys.map { Record(line:$0,source:original.lines[$0],candidate:lines[$0]) }
-            let file=URL(fileURLWithPath:dir+"/margin-evidence/positions-"+UUID().uuidString+".json")
-            try? JSONEncoder().encode(records).write(to:file,options:.atomic)
-            print("AX-DIAG pairs",original.lines.count,lines.count,Set(lines.keys).intersection(original.lines.keys).count,file.lastPathComponent)
+        return Self.lineDisplacement(lines, from: original.lines)
+    }
+
+    static func lineDisplacement(_ lines: [String: CGRect], from original: [String: CGRect]) -> CGSize? {
+        // Chrome can split links into different accessibility runs in two views of the same PDF.
+        let samples = lines.compactMap { line, rect -> (shift: CGSize, reference: CGRect)? in
+            guard let reference = original[line],
+                  abs(rect.width - reference.width) <= 1, abs(rect.height - reference.height) <= 1,
+                  rect.width > 1, rect.height > 1 else { return nil }
+            return (CGSize(width: rect.minX - reference.minX, height: rect.minY - reference.minY), reference)
         }
-        var anchors: [(reference:CGRect, offset:CGSize)] = []
-        for (line, rect) in lines {
-            guard let reference = original.lines[line],
-                  abs(rect.width - reference.width) <= 1, abs(rect.height - reference.height) <= 1 else { continue }
-            anchors.append((reference, CGSize(width: rect.minX - reference.minX, height: rect.minY - reference.minY)))
-        }
-        guard anchors.count >= 2 else { return nil }
-        let middle = anchors.count/2
-        let delta = CGSize(width: anchors.map { $0.offset.width }.sorted()[middle],
-                           height: anchors.map { $0.offset.height }.sorted()[middle])
-        let agree = anchors.filter { abs($0.offset.width-delta.width) <= 1 && abs($0.offset.height-delta.height) <= 1 }
-        guard agree.count * 3 >= anchors.count * 2,
-              let first = agree.min(by: { $0.reference.midY < $1.reference.midY }),
-              let last = agree.max(by: { $0.reference.midY < $1.reference.midY }),
-              last.reference.midY-first.reference.midY > max(last.reference.height,first.reference.height)
-        else { return nil }
-        print("AX-DIAG consensus",agree.count,"of",anchors.count,delta)
-        return delta
+        guard samples.count >= 3 else { return nil }
+        let middle = samples.count / 2
+        let shift = CGSize(width: samples.map { $0.shift.width }.sorted()[middle],
+                           height: samples.map { $0.shift.height }.sorted()[middle])
+        let agreeing = samples.filter { abs($0.shift.width - shift.width) <= 1 && abs($0.shift.height - shift.height) <= 1 }
+        guard agreeing.count >= 3, agreeing.count * 4 >= samples.count * 3,
+              let top = agreeing.map({ $0.reference.maxY }).min(),
+              let bottom = agreeing.map({ $0.reference.minY }).max(), bottom > top else { return nil }
+        return shift
     }
 
     private static func read(_ viewer: AXUIElement) -> Self? {
@@ -87,7 +81,7 @@ struct PDFReadingPosition {
         }), !duplicatePage, editControls["Draw"] == true, editControls["Undo"] == true,
               editControls["Redo"] == true, editControls["Add text annotations"] != false,
               pageNumbers.count == 1, zoomLevels.count == 1,
-              let page = pages[pageNumbers[0]] else { print("AX-DIAG controls",duplicatePage, pageNumbers,zoomLevels,pages.keys.sorted(),editControls); return nil }
+              let page = pages[pageNumbers[0]] else { return nil }
 
         var lines: [String: CGRect] = [:]
         var seen: Set<String> = []
@@ -111,7 +105,7 @@ struct PDFReadingPosition {
                 start = end
             }
             return false
-        }), lines.count >= 2 else { print("AX-DIAG lines", lines.count); return nil }
+        }), lines.count >= 2 else { return nil }
         return Self(pageNumber: pageNumbers[0], zoomPercent: zoomLevels[0], viewer: viewer, lines: lines)
     }
 
@@ -135,15 +129,15 @@ struct PDFReadingPosition {
         var index = 0
         let deadline = ProcessInfo.processInfo.systemUptime + 2
         while index < queue.count {
-            guard ProcessInfo.processInfo.systemUptime < deadline else { print("AX-DIAG timeout",index,queue.count); return false }
+            guard ProcessInfo.processInfo.systemUptime < deadline else { return false }
             let node = queue[index]
             index += 1
             var result: CFArray?
             AXUIElementSetMessagingTimeout(node, 0.1)
             guard AXUIElementCopyMultipleAttributeValues(node, names as CFArray, [], &result) == .success,
-                  let attributes = result as? [Any], attributes.count == names.count else { print("AX-DIAG bulk",index,queue.count,String(describing:result)); return false }
+                  let attributes = result as? [Any], attributes.count == names.count else { return false }
             if visit(node, attributes), let children = attributes[1] as? [AXUIElement] {
-                guard queue.count + children.count <= 3000 else { print("AX-DIAG too many",queue.count); return false }
+                guard queue.count + children.count <= 3000 else { return false }
                 queue.append(contentsOf: children)
             }
         }

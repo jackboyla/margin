@@ -159,15 +159,17 @@ final class WindowCapture {
     private nonisolated static let pdfViewportScript = resourceScript("PDFViewport")
     private let pdfRenderer = ChromePDFHighlights()
 
+    var awaitingPDFClear: Bool { pdfRenderer.awaitingClear }
+
     func paintBrowserHighlights(target: WindowTarget, quotes: [String],
                                 isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool {
         guard isChromiumBrowser(target.bundleID), let url = target.url else { return false }
         if let paper = ChromePDFHighlights.paperURL(url) {
             guard let template = Self.pdfViewportScript else { return false }
-            return try await pdfRenderer.paint(paper: paper, quotes: quotes, isCurrent: isCurrent) { arguments in
+            return try await pdfRenderer.paint(paper: paper, quotes: quotes, isCurrent: isCurrent) { arguments, input in
                 var request = arguments
                 request["url"] = url
-                return try await self.browserCommand(target, template: template, request: request)
+                return try await self.browserCommand(target, template: template, request: request, input: input)
             } position: { excluding in
                 try await Task.detached(priority: .utility) {
                     let app = AXUIElementCreateApplication(target.pid)
@@ -181,7 +183,7 @@ final class WindowCapture {
         return try await browserCommand(target, template: template, request: ["url": url, "quotes": quotes]) == "owned"
     }
 
-    private func browserCommand(_ target: WindowTarget, template: String, request: [String: Any]) async throws -> String {
+    private func browserCommand(_ target: WindowTarget, template: String, request: [String: Any], input: PDFInputSnapshot? = nil) async throws -> String {
         guard let url = target.url, let data = try? JSONSerialization.data(withJSONObject: request),
               let json = String(data: data, encoding: .utf8) else { return "unsupported" }
         return try await queued {
@@ -232,6 +234,7 @@ final class WindowCapture {
             arguments.insert(NSAppleEventDescriptor(string: url), at: 2)
             event.setParam(arguments, forKeyword: AEKeyword(keyDirectObject))
             var error: NSDictionary?
+            if let input, PDFInputSnapshot() != input { return "interrupted" }
             let reply = script?.executeAppleEvent(event, error: &error)
             try checkWindow()
             guard self.singleBrowser(target.bundleID, pid: target.pid) else { throw WindowCaptureError.sourceChanged }
@@ -241,9 +244,12 @@ final class WindowCapture {
                 return "unsupported"
             }
             if value == "changed" { throw WindowCaptureError.sourceChanged }
-            struct Result: Decodable { let status: String }
+            struct Result: Decodable { let status: String; let matched: Int? }
             guard let result = try? JSONDecoder().decode(Result.self, from: Data(value.utf8)) else { return "unsupported" }
             if result.status == "changed" { throw WindowCaptureError.sourceChanged }
+            if let matched = result.matched {
+                Self.highlightLog.info("Browser paint \(result.status, privacy: .public); matched \(matched) quotes")
+            }
             return result.status
         }
     }

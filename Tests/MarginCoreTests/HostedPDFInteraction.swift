@@ -69,47 +69,53 @@ final class HostedPDFInteraction: XCTestCase {
         }
         if let tmp = env["RUNNER_TEMP"] { try rows.joined(separator:"\n").write(toFile:tmp+"/margin-evidence/ax-tree-"+(env["MARGIN_AX_ONLY"] ?? "web")+".txt",atomically:true,encoding:.utf8) }
         print("AX-DIAG snapshot",rows.count,rows.filter { $0.contains("AXWebArea") || $0.contains("Page number") || $0.contains("Zoom level") }.prefix(10))
-        let before = try XCTUnwrap(PDFReadingPosition.current(in: window))
-        print("API-TRACE baseline", before.pageNumber, before.zoomPercent)
-        XCTAssertEqual(before.pageNumber, 4)
-        if env["MARGIN_AX_ONLY"] == "1" { return }
-        let painter=ChromePDFHighlights()
-        let paper=try XCTUnwrap(URL(string:"https://arxiv.org/pdf/2506.01844"))
+        guard env["MARGIN_AX_ONLY"] != "1" else { return }
+        let permission = await HostedAutomationConsent.askForChrome()
+        print("APPLE-EVENT permission result",permission)
+        XCTAssertEqual(permission,0)
+        guard permission == 0 else {return}
+        _ = try await exchange(["action":"reset"])
+        let capture = WindowCapture()
+        let target = try await capture.resolve(target: capture.currentTarget())
+        XCTAssertEqual(target.bundleID,"com.google.Chrome")
+        XCTAssertEqual(target.url?.components(separatedBy:"#").first,"https://arxiv.org/pdf/2506.01844")
         let first = "Faster inference through layer skipping"
         let second = "tradeoff between speed and performance"
-        for (step, quotes) in [[first], [first, second], [second], []].enumerated() {
+        if let tmp=env["RUNNER_TEMP"] {
+            let bytes=try Data(contentsOf:URL(fileURLWithPath:tmp+"/smolvla.pdf"))
+            try PDFHighlightDocument.annotated(bytes,quotes:[first])?.write(to:URL(fileURLWithPath:tmp+"/margin-native-annotated.pdf"))
+        }
+        var initial:PDFReadingPosition?
+        var previous=""
+        for (step,quotes) in [[first],[first,second],[second],[]].enumerated() {
             _ = try await exchange(["action":"interaction","step":step])
-            let baseline = try XCTUnwrap(PDFReadingPosition.current(in:window))
-            if step == 1 {
-                let travelled = try XCTUnwrap(baseline.displacement(from:before))
+            var pos:PDFReadingPosition?
+            let deadline=Date().addingTimeInterval(8)
+            while pos==nil && Date()<deadline {
+                pos=PDFReadingPosition.current(in:window)
+                if pos==nil {try await Task.sleep(for:.milliseconds(170))}
+            }
+            let baseline=try XCTUnwrap(pos)
+            XCTAssertEqual(baseline.pageNumber,4)
+            XCTAssertEqual(baseline.zoomPercent,150)
+            if step==0 {initial=baseline}
+            if step==1 {
+                let travelled=try XCTUnwrap(baseline.displacement(from:try XCTUnwrap(initial)))
                 XCTAssertGreaterThan(abs(travelled.height),30)
                 print("API-TRACE physical wheel",travelled)
             }
-            let result = try await painter.paint(paper:paper, quotes:quotes, isCurrent:{true}, command:exchange, position:{ previous in PDFReadingPosition.current(in:window,excluding:previous) })
-            XCTAssertTrue(result)
+            let painted=try await capture.paintBrowserHighlights(target:target,quotes:quotes,isCurrent:{true})
+            XCTAssertTrue(painted)
             let src=try await exchange(["action":"evidence","step":step])
-            print("API-TRACE after",step,src.prefix(100))
-            guard src.hasPrefix("blob:https://arxiv.org/") else { XCTFail("Chrome has no active annotated PDF at step \(step)"); return }
-            let position = try XCTUnwrap(PDFReadingPosition.current(in: window))
-            let delta = try XCTUnwrap(position.displacement(from: baseline))
-            print("API-TRACE same position across edit",step,delta)
-            XCTAssertLessThanOrEqual(abs(delta.width), 1)
-            XCTAssertLessThanOrEqual(abs(delta.height), 1)
+            guard src.hasPrefix("blob:https://arxiv.org/"),src != previous else {
+                XCTFail("Chrome did not commit a fresh annotated frame at step \(step)");return
+            }
+            previous=src
+            let observed=try XCTUnwrap(PDFReadingPosition.current(in:window))
+            let delta=try XCTUnwrap(observed.displacement(from:baseline))
+            XCTAssertLessThanOrEqual(abs(delta.width),1)
+            XCTAssertLessThanOrEqual(abs(delta.height),1)
+            print("API-TRACE verified actual AppleEvent",step,observed.pageNumber,observed.zoomPercent,delta,src.prefix(90))
         }
-        print("API-TRACE geometry and four replacements passed")
-        let permission = await HostedAutomationConsent.askForChrome()
-        print("APPLE-EVENT permission result", permission)
-        guard permission == 0 else { return }
-        let capture = WindowCapture()
-        let target = try await capture.resolve(target: capture.currentTarget())
-        XCTAssertEqual(target.bundleID, "com.google.Chrome")
-        XCTAssertEqual(target.url?.components(separatedBy:"#").first, paper.absoluteString)
-        let painted = try await capture.paintBrowserHighlights(target:target, quotes:[first], isCurrent:{true})
-        XCTAssertTrue(painted)
-        let src = try await exchange(["action":"evidence","step":"apple-event"])
-        XCTAssertTrue(src.hasPrefix("blob:https://arxiv.org/"))
-        let active = try await exchange(["action":"status","token":Data(SHA256.hash(data: JSONEncoder().encode([paper.absoluteString,first]))).base64EncodedString()])
-        XCTAssertEqual(active,"active")
-        print("APPLE-EVENT verified",src)
     }
 }

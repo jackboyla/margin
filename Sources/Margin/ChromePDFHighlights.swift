@@ -1,9 +1,11 @@
+import CoreGraphics
 import CryptoKit
 import Foundation
 
 @MainActor
 final class ChromePDFHighlights {
     private var original: (url: URL, bytes: Data)?
+    private(set) var awaitingClear = false
     private var retry: (token: String, after: Date)?
     private let session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
@@ -23,18 +25,18 @@ final class ChromePDFHighlights {
     }
 
     func paint(paper: URL, quotes: [String], isCurrent: @MainActor () -> Bool,
-               command: ([String: Any]) async throws -> String,
+               command: ([String: Any], PDFInputSnapshot?) async throws -> String,
                position: (PDFReadingPosition?) async throws -> PDFReadingPosition?) async throws -> Bool {
         let key = try JSONEncoder().encode([paper.absoluteString] + quotes.sorted())
         let token = Data(SHA256.hash(data: key)).base64EncodedString()
-        func send(_ action: String, _ fields: [String: Any] = [:]) async throws -> String {
+        func send(_ action: String, _ fields: [String: Any] = [:], input: PDFInputSnapshot? = nil) async throws -> String {
             var request = fields
             request["action"] = action
             request["token"] = token
-            return try await command(request)
+            return try await command(request, input)
         }
         let status = try await send("status")
-        print("API-TRACE status", status)
+        if quotes.isEmpty { awaitingClear = status != "active" && status != "original" }
         if status == "active" || (status == "original" && quotes.isEmpty) { return true }
         guard ["original", "different", "pending", "ready", "failed"].contains(status) else { return false }
         // On a supported PDF, keep the visible paper while a new copy loads or position is uncertain.
@@ -48,13 +50,11 @@ final class ChromePDFHighlights {
         do {
             bytes = try await originalBytes(for: paper)
         } catch {
-            print("API-TRACE download error", error)
             return true
         }
         let marked = await Task.detached(priority: .utility) {
             PDFHighlightDocument.annotated(bytes, quotes: quotes)
         }.value
-        print("API-TRACE bytes",bytes.count, marked?.count ?? -1)
         guard let marked, isCurrent() else { return true }
         if marked == bytes && status == "original" {
             retry = (token, .distantFuture)
@@ -74,7 +74,6 @@ final class ChromePDFHighlights {
                 let deadline = Date().addingTimeInterval(4)
                 while isCurrent(), candidate == nil, Date() < deadline, ["pending", "ready"].contains(state) {
                     if state == "ready" { candidate = try await position(source) }
-                    print("API-TRACE stage", state, candidate?.pageNumber ?? -1, candidate?.zoomPercent ?? -1)
                     if candidate == nil {
                         try await Task.sleep(for: .milliseconds(100))
                         state = try await send("status")
@@ -87,14 +86,15 @@ final class ChromePDFHighlights {
                 }
                 guard candidate.pageNumber == source.pageNumber,
                       let delta = candidate.displacement(from: source) else { break }
-                print("API-TRACE offset", delta, left, top, zoom)
                 if abs(delta.width) <= 1, abs(delta.height) <= 1 {
+                    let input = PDFInputSnapshot()
                     let stillAligned = await Task.detached(priority: .userInitiated) {
                         guard let original = source.refreshed(), let staged = candidate.refreshed(),
                               let difference = staged.displacement(from: original) else { return false }
                         return abs(difference.width) <= 1 && abs(difference.height) <= 1
                     }.value
-                    if stillAligned, isCurrent(), try await send("commit") == "active" {
+                    if stillAligned, isCurrent(), try await send("commit", input: input) == "active" {
+                        if quotes.isEmpty { awaitingClear = false }
                         retry = nil
                         return true
                     }
@@ -123,5 +123,16 @@ final class ChromePDFHighlights {
         let bytes = try Data(contentsOf: file)
         original = (url, bytes)
         return bytes
+    }
+}
+
+/// Counts physical input across the final accessibility measurement and queued Apple Event.
+struct PDFInputSnapshot: Equatable, Sendable {
+    private let counts: [UInt32]
+
+    init() {
+        let events: [CGEventType] = [.scrollWheel, .leftMouseDown, .leftMouseDragged, .leftMouseUp,
+                                     .otherMouseDown, .otherMouseDragged, .keyDown]
+        counts = events.map { CGEventSource.counterForEventType(.combinedSessionState, eventType: $0) }
     }
 }
