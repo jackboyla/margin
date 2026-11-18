@@ -144,29 +144,52 @@ final class WindowCapture {
 
     private nonisolated static let highlightLog = Logger(subsystem: "com.jackboylan.margin", category: "BrowserHighlights")
 
-    private nonisolated static let browserHighlightScript: String? = {
+    private nonisolated static func resourceScript(_ name: String) -> String? {
         let bundle: Bundle?
         if Bundle.main.bundleURL.pathExtension == "app" {
             bundle = Bundle.main.url(forResource: "Margin_Margin", withExtension: "bundle").flatMap(Bundle.init(url:))
         } else {
             bundle = Bundle.module
         }
-        guard let file = bundle?.url(forResource: "BrowserHighlights", withExtension: "js") else { return nil }
+        guard let file = bundle?.url(forResource: name, withExtension: "js") else { return nil }
         return try? String(contentsOf: file, encoding: .utf8)
-    }()
+    }
 
-    func paintBrowserHighlights(target: WindowTarget, quotes: [String]) async throws -> Bool {
+    private nonisolated static let browserHighlightScript = resourceScript("BrowserHighlights")
+    private nonisolated static let pdfViewportScript = resourceScript("PDFViewport")
+    private let pdfRenderer = ChromePDFHighlights()
+
+    var awaitingPDFClear: Bool { pdfRenderer.awaitingClear }
+
+    func paintBrowserHighlights(target: WindowTarget, quotes: [String],
+                                isCurrent: @escaping @MainActor () -> Bool) async throws -> Bool {
         guard isChromiumBrowser(target.bundleID), let url = target.url else { return false }
-        return try await queued {
-            guard let template = Self.browserHighlightScript,
-                  let json = try? JSONSerialization.data(withJSONObject: ["url": url, "quotes": quotes]),
-                  let request = String(data: json, encoding: .utf8),
-                  self.singleBrowser(target.bundleID, pid: target.pid) else { return false }
-            guard self.automationAllowed(target.bundleID, ask: false) else {
-                Self.highlightLog.info("Browser painting requires Automation permission")
-                return false
+        if let paper = ChromePDFHighlights.paperURL(url) {
+            guard let template = Self.pdfViewportScript else { return false }
+            return try await pdfRenderer.paint(paper: paper, quotes: quotes, isCurrent: isCurrent) { arguments, input in
+                var request = arguments
+                request["url"] = url
+                return try await self.browserCommand(target, template: template, request: request, input: input)
+            } position: { excluding in
+                try await Task.detached(priority: .utility) {
+                    let app = AXUIElementCreateApplication(target.pid)
+                    guard let win = self.element(app, kAXFocusedWindowAttribute), self.matches(win, frame: target.frame)
+                    else { throw WindowCaptureError.sourceChanged }
+                    return PDFReadingPosition.current(in: win, excluding: excluding)
+                }.value
             }
-            let javascript = template.replacingOccurrences(of: "__MARGIN_REQUEST__", with: request)
+        }
+        guard let template = Self.browserHighlightScript else { return false }
+        return try await browserCommand(target, template: template, request: ["url": url, "quotes": quotes]) == "owned"
+    }
+
+    private func browserCommand(_ target: WindowTarget, template: String, request: [String: Any], input: PDFInputSnapshot? = nil) async throws -> String {
+        guard let url = target.url, let data = try? JSONSerialization.data(withJSONObject: request),
+              let json = String(data: data, encoding: .utf8) else { return "unsupported" }
+        return try await queued {
+            guard self.singleBrowser(target.bundleID, pid: target.pid),
+                  self.automationAllowed(target.bundleID, ask: false) else { return "unsupported" }
+            let javascript = template.replacingOccurrences(of: "__MARGIN_REQUEST__", with: json)
             func checkWindow() throws {
                 guard let front = self.frontWindow(pid: target.pid), front.id == target.windowID,
                       front.frame == target.frame else { throw WindowCaptureError.sourceChanged }
@@ -211,24 +234,23 @@ final class WindowCapture {
             arguments.insert(NSAppleEventDescriptor(string: url), at: 2)
             event.setParam(arguments, forKeyword: AEKeyword(keyDirectObject))
             var error: NSDictionary?
+            if let input, PDFInputSnapshot() != input { return "interrupted" }
             let reply = script?.executeAppleEvent(event, error: &error)
             try checkWindow()
             guard self.singleBrowser(target.bundleID, pid: target.pid) else { throw WindowCaptureError.sourceChanged }
             guard error == nil, let value = reply?.stringValue else {
                 let code = (error?[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
                 Self.highlightLog.info("Browser painting unavailable; AppleScript error \(code)")
-                return false
+                return "unsupported"
             }
             if value == "changed" { throw WindowCaptureError.sourceChanged }
-            struct Result: Decodable { let status: String; let matched: Int }
-            guard let result = try? JSONDecoder().decode(Result.self, from: Data(value.utf8)) else { return false }
+            struct Result: Decodable { let status: String; let matched: Int? }
+            guard let result = try? JSONDecoder().decode(Result.self, from: Data(value.utf8)) else { return "unsupported" }
             if result.status == "changed" { throw WindowCaptureError.sourceChanged }
-            if result.status == "pdf" {
-                Self.highlightLog.info("PDF viewer received \(quotes.count) saved quotes")
-                return true
+            if let matched = result.matched {
+                Self.highlightLog.info("Browser paint \(result.status, privacy: .public); matched \(matched) quotes")
             }
-            Self.highlightLog.info("Browser paint \(result.status, privacy: .public); matched \(result.matched) of \(quotes.count) quotes")
-            return result.status == "owned"
+            return result.status
         }
     }
 
