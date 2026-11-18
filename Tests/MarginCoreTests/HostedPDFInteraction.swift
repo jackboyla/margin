@@ -10,7 +10,9 @@ final class HostedPDFInteraction: XCTestCase {
         try XCTSkipUnless(env["MARGIN_HOSTED_INTERACTION"] == "1")
         let ipc = URL(fileURLWithPath: try XCTUnwrap(env["MARGIN_IPC"]))
         print("API-TRACE trusted", AXIsProcessTrusted())
-        let app = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").first { !$0.isTerminated })
+        let pid=try XCTUnwrap(Int32(env["MARGIN_CHROME_PID"] ?? ""))
+        let app=try XCTUnwrap(NSRunningApplication(processIdentifier:pid))
+        if !app.isActive {app.activate(options:[]) }
         print("API-TRACE Chrome",app.processIdentifier,app.isActive)
         let ax = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(ax, 1.5)
@@ -41,7 +43,7 @@ final class HostedPDFInteraction: XCTestCase {
             throw URLError(.timedOut)
         }
 
-        let fields = [kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, "AXURL", kAXEnabledAttribute, kAXChildrenAttribute]
+        let fields = [kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, "AXURL", kAXEnabledAttribute, kAXDescriptionAttribute, kAXChildrenAttribute]
         var queue: [(AXUIElement,Int)] = [(window,0)]
         var idx=0
         var rows:[String]=[]
@@ -50,10 +52,10 @@ final class HostedPDFInteraction: XCTestCase {
             let (node,depth)=queue[idx];idx += 1
             var values:CFArray?
             let status=AXUIElementCopyMultipleAttributeValues(node,fields as CFArray,[],&values)
-            guard let a=values as? [Any],a.count==6 else{
+            guard let a=values as? [Any],a.count==7 else{
                 rows.append("depth=\(depth) error=\(status.rawValue)");continue
             }
-            let row=a.prefix(5).map { item -> String in
+            let row=a.prefix(6).map { item -> String in
                 if let u=item as? URL { return u.absoluteString }
                 if let n=item as? NSNumber { return n.stringValue }
                 if let s=item as? String { return String(s.prefix(150)).replacingOccurrences(of:"\n",with:" ") }
@@ -61,7 +63,7 @@ final class HostedPDFInteraction: XCTestCase {
             }.joined(separator:" | ")
             rows.append(String(repeating:" ",count:depth)+row)
             let title = a[1] as? String ?? ""
-            if !(title.hasPrefix("Page ") && title != "Page 4"), let kids=a[5] as? [AXUIElement] {
+            if !(title.hasPrefix("Page ") && title != "Page 4"), let kids=a[6] as? [AXUIElement] {
                 queue += kids.map { ($0,depth+1) }
             }
         }
