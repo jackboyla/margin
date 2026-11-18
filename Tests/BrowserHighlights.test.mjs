@@ -151,59 +151,117 @@ test('normalization boundaries and CSS visibility cannot paint a different passa
   assert.equal(await page.evaluate(() => CSS.highlights.get('margin-saved-passages').size), 0);
 });
 
-test('arXiv PDFs keep the built-in viewer, tab URL and highlights during interaction', async t => {
-  // The headless shell has no PDF viewer. Full Chromium renders this generated paper.
+// All variants have identical text and page geometry. Only page two's native highlight annotations change.
+function paperWithMarks(count) {
+  const lines = [540, 480, 420, 360, 300].map(y => `BT /F1 16 Tf 75 ${y} Td (A passage for the reader.) Tj ET`).join('\n');
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Count 2 /Kids [3 0 R 4 0 R] >>',
+    ...[false, true].map(marked => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 5 0 R >> >> /Contents 6 0 R /Annots [${marked ? ['7 0 R', '8 0 R'].slice(0, count).join(' ') : ''}] >>`),
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${lines.length} >>\nstream\n${lines}\nendstream`,
+    ...[480, 420].map(y => `<< /Type /Annot /Subtype /Highlight /C [1 1 0] /Rect [72 ${y-3} 155 ${y+13}] /QuadPoints [72 ${y+13} 155 ${y+13} 72 ${y-3} 155 ${y-3}] >>`),
+  ];
+  let pdf = '%PDF-1.7\n';
+  const offsets = [];
+  for (const [i, object] of objects.entries()) {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const start = pdf.length;
+  pdf += `xref\n0 ${objects.length+1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) pdf += String(offset).padStart(10, '0') + ' 00000 n \n';
+  return Buffer.from(pdf + `trailer\n<< /Size ${objects.length+1} /Root 1 0 R >>\nstartxref\n${start}\n%%EOF\n`);
+}
+
+test('saving PDF highlights preserves the visible text, zoom and reading position in Chrome', async t => {
+  const script = await readFile(new URL('../Sources/Margin/Resources/PDFViewport.js', import.meta.url), 'utf8');
   const context = await chromium.launchPersistentContext('', { channel: 'chromium' });
   t.after(() => context.close());
   const page = await context.newPage();
-  await page.setContent('<p>A passage for the reader to highlight.</p>');
-  const paper = await page.pdf();
-  const paperURL = 'https://arxiv.org/pdf/2506.01844';
-  await page.route(paperURL, route => route.fulfill({ contentType: 'application/pdf', body: paper }));
-  await page.goto(paperURL);
-  const quotes = ['passage for the reader'];
-  assert.equal((await install(page, quotes, paperURL)).status, 'pdf');
-  const viewer = page.locator('iframe[title="PDF with saved highlights"]');
-  await viewer.waitFor({state: 'visible'});
-  const decoder = await context.newPage();
-  async function hasPaint() {
-    const pixels = await page.screenshot();
-    return decoder.evaluate(async png => {
+  const paper = 'https://arxiv.org/pdf/2506.01844';
+  const url = paper + '#page=2&zoom=125,0,180';
+  await page.route(paper, route => route.fulfill({ contentType: 'application/pdf', body: paperWithMarks(0) }));
+  await page.goto(url);
+  async function run(action, token, extra = {}) {
+    const request = JSON.stringify({ url, action, token, ...extra });
+    return JSON.parse(await page.evaluate(script.replace('__MARGIN_REQUEST__', () => request))).status;
+  }
+  async function stage(token, top, count) {
+    const bytes = count === undefined ? {} : { bytes: paperWithMarks(count).toString('base64') };
+    assert.equal(await run('stage', token, { page: 2, zoom: 100, left: 0, top, ...bytes }), 'pending');
+    await until(async () => await run('status', token) === 'ready');
+  }
+  async function until(predicate) {
+    const deadline = Date.now() + 8000;
+    while (!await predicate()) {
+      assert.ok(Date.now() < deadline, 'Chrome did not reach the expected rendered state');
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
+  }
+  async function pixels() {
+    const buffer = await page.screenshot({ clip: { x: 385, y: 80, width: 780, height: 580 } });
+    return page.evaluate(async png => {
       const image = new Image();
       image.src = 'data:image/png;base64,' + png;
       await image.decode();
       const canvas = document.createElement('canvas');
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const drawing = canvas.getContext('2d');
-      drawing.drawImage(image, 0, 0);
-      const { data } = drawing.getImageData(350, 56, image.width - 350, image.height - 56);
-      let purple = 0;
-      for (let i = 0; i < data.length; i += 4) {
-        if (data[i] > 200 && data[i] - data[i+1] > 12 && data[i+2] - data[i] > 12) purple++;
+      canvas.width = image.width; canvas.height = image.height;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(image, 0, 0);
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let ink = 0, hash = 0, last = -2;
+      const bands = [];
+      for (let y = 0; y < canvas.height; y++) {
+        let yellow = 0;
+        for (let x = 0; x < canvas.width; x++) {
+          const i = 4 * (y * canvas.width + x);
+          if (data[i] < 128 && data[i+1] < 128) {
+            ink++;
+            hash = (Math.imul(hash, 31) + i) | 0;
+          }
+          if (data[i] > 200 && data[i+1] > 200 && data[i+2] < 120) yellow++;
+        }
+        if (yellow > 20) {
+          if (y > last + 1) bands.push(y);
+          last = y;
+        }
       }
-      return purple > 50;
-    }, pixels.toString('base64'));
+      return { ink, hash, bands };
+    }, buffer.toString('base64'));
   }
-  async function waitForPaint() {
-    const deadline = Date.now() + 5000;
-    while (!(await hasPaint())) {
-      assert.ok(Date.now() < deadline, 'Chrome did not paint the PDF text directive');
-      await new Promise(resolve => setTimeout(resolve, 50));
-    }
+  async function atPosition(expected, count) {
+    let result;
+    await until(async () => {
+      result = await pixels();
+      return result.ink > 750 && result.ink < 20000 && result.bands.length === count && (!expected || result.hash === expected.hash);
+    });
+    return result;
   }
-  await waitForPaint();
-  const frame = await viewer.elementHandle();
-  assert.match(await frame.getAttribute('src'), /#:~:text=passage%20for%20the%20reader$/);
-  await page.mouse.click(700, 300);
-  await page.mouse.wheel(0, 10);
-  await install(page, quotes, paperURL);
-  assert.equal(await frame.evaluate(node => node.isConnected), true);
-  assert.equal(page.url(), paperURL);
-  await waitForPaint();
+
+  const initial = await atPosition(null, 0);
+  await stage('first', 0, 1);
+  assert.deepEqual(await pixels(), initial);
+  await stage('first', 180);
+  assert.equal(await run('commit', 'first'), 'active');
+  const first = await atPosition(initial, 1);
+  await page.mouse.click(850, 350);
+  await atPosition(first, 1);
+  await page.mouse.move(695, 285);
+  await page.mouse.wheel(0, 80);
+  await until(async () => Math.abs((await pixels()).bands[0] - first.bands[0] + 80) <= 1);
+  const scrolled = await pixels();
+  await stage('second', 244, 2);
+  assert.equal(await run('commit', 'second'), 'active');
+  const second = await atPosition(scrolled, 2);
+  assert.equal(second.bands[0], scrolled.bands[0]);
+  await stage('removed', 244, 0);
+  assert.equal(await run('commit', 'removed'), 'active');
+  await atPosition(scrolled, 0);
+  assert.equal(page.url(), url);
   await page.reload();
-  await install(page, quotes, paperURL);
-  await waitForPaint();
-  await install(page, [], paperURL);
-  assert.equal(await viewer.count(), 0);
+  await atPosition(initial, 0);
+  await stage('second', 180, 2);
+  assert.equal(await run('commit', 'second'), 'active');
+  await atPosition(initial, 2);
 });

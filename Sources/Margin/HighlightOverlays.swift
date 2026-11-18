@@ -140,7 +140,9 @@ final class HighlightOverlays {
                         }
                         let key = SourceIdentity.documentID(bundleID: target.bundleID, title: target.title, url: target.url)
                         let quotes = model.library.highlights.filter { $0.documentID == key }.map(\.quote)
-                        let ownsPage = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes)
+                        let ownsPage = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes) {
+                            self.generation == revision && self.viewportRevision == viewport
+                        }
                         guard generation == revision else { continue }
                         browserOwnsPage = ownsPage
                         if ownsPage || quotes.isEmpty {

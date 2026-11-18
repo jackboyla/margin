@@ -4,50 +4,6 @@
   const version = 1;
   const reply = (status, matched = 0) => JSON.stringify({ status, matched });
   if (new URL(request.url).href !== location.href) return reply("changed");
-  if (document.contentType === "application/pdf" && window === top &&
-      location.protocol === "https:" && location.hostname === "arxiv.org" &&
-      location.pathname.startsWith("/pdf/")) {
-    // Chrome consumes PDF text directives when its viewer opens a document.
-    // Keep them on the embedded viewer URL so the tab retains its library identity.
-    const pdfKey = Symbol.for("com.jackboylan.margin.pdfHighlights");
-    const previous = window[pdfKey];
-    const quotes = [...new Set(request.quotes.map(q => q.trim().replace(/\s+/gu, " ")).filter(Boolean))];
-    if (!quotes.length) {
-      previous?.frame.remove();
-      if (previous) document.body.inert = previous.originalInert;
-      delete window[pdfKey];
-      return reply("owned");
-    }
-    const directives = quotes.map(quote => "text=" + encodeURIComponent(quote).replace(/-/g, "%2D"));
-    const src = location.href + (location.hash ? "" : "#") + ":~:" + directives.join("&");
-    if (previous?.src === src && previous.failed) return reply("unsupported");
-    if (previous?.src !== src || !previous.frame.isConnected) {
-      const frame = document.createElement("iframe");
-      frame.title = "PDF with saved highlights";
-      frame.style.cssText = "position:fixed;inset:0;width:100%;height:100%;border:0;z-index:2147483647;visibility:hidden";
-      const originalInert = previous?.originalInert ?? document.body.inert;
-      const state = { src, frame, originalInert, failed: false };
-      window[pdfKey] = state;
-      frame.addEventListener("load", () => {
-        if (window[pdfKey] !== state) return;
-        const pdf = frame.contentDocument;
-        if (pdf?.contentType === "application/pdf" && pdf.URL.split("#")[0] === location.href.split("#")[0]) {
-          frame.style.visibility = "visible";
-          // Expose only the visible copy of the paper to keyboard and accessibility clients.
-          document.body.inert = true;
-        } else {
-          state.failed = true;
-          document.body.inert = originalInert;
-          frame.remove();
-        }
-      });
-      frame.src = src;
-      if (previous?.frame.isConnected) previous.frame.replaceWith(frame);
-      else document.documentElement.appendChild(frame);
-    }
-    // Chrome resolves these quotes internally and does not expose its match count.
-    return reply("pdf");
-  }
   if (!["text/html", "application/xhtml+xml"].includes(document.contentType) ||
       !document.body || !globalThis.Highlight || !CSS.highlights) return reply("unsupported");
   const previous = window[key];
