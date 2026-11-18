@@ -5,36 +5,46 @@ import XCTest
 
 final class HostedPDFInteraction: XCTestCase {
     @MainActor func testTwoPDFEdits() async throws {
-        try XCTSkipUnless(ProcessInfo.processInfo.environment["MARGIN_HOSTED_INTERACTION"] == "1")
-        let capture = WindowCapture()
-        print("API-TRACE trusted", capture.accessibilityPermission)
-        let target = try await capture.resolve(target: capture.currentTarget())
-        print("API-TRACE target", target.bundleID, target.url ?? "")
-        XCTAssertEqual(target.bundleID, "com.google.Chrome")
-        let app = AXUIElementCreateApplication(target.pid)
+        let env = ProcessInfo.processInfo.environment
+        try XCTSkipUnless(env["MARGIN_HOSTED_INTERACTION"] == "1")
+        let ipc = URL(fileURLWithPath: try XCTUnwrap(env["MARGIN_IPC"]))
+        print("API-TRACE trusted", AXIsProcessTrusted())
+        let app = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.google.Chrome").first { !$0.isTerminated })
+        print("API-TRACE Chrome",app.processIdentifier,app.isActive)
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
         var value: CFTypeRef?
-        XCTAssertEqual(AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &value), .success)
+        XCTAssertEqual(AXUIElementCopyAttributeValue(ax, kAXFocusedWindowAttribute as CFString, &value), .success)
         let window = unsafeBitCast(try XCTUnwrap(value), to: AXUIElement.self)
+        func exchange(_ fields: [String: Any]) async throws -> String {
+            try JSONSerialization.data(withJSONObject: fields).write(to: ipc.appendingPathComponent("request"), options: .atomic)
+            let reply=ipc.appendingPathComponent("reply")
+            let deadline=Date().addingTimeInterval(20)
+            while Date()<deadline {
+                if let text=try? String(contentsOf:reply,encoding:.utf8) {
+                    try FileManager.default.removeItem(at:reply)
+                    return text
+                }
+                try await Task.sleep(for:.milliseconds(10))
+            }
+            throw URLError(.timedOut)
+        }
         let before = try XCTUnwrap(PDFReadingPosition.current(in: window))
         print("API-TRACE baseline", before.pageNumber, before.zoomPercent)
         XCTAssertEqual(before.pageNumber, 4)
+        let painter=ChromePDFHighlights()
+        let paper=try XCTUnwrap(URL(string:"https://arxiv.org/pdf/2506.01844"))
         let first = "the best features for downstream tasks"
         let second = "tradeoff between speed and performance"
         for (step, quotes) in [[first], [first, second], [second], []].enumerated() {
-            let result = try await capture.paintBrowserHighlights(target: target, quotes: quotes, isCurrent: { true })
+            let result = try await painter.paint(paper:paper, quotes:quotes, isCurrent:{true}, command:exchange, position:{ previous in PDFReadingPosition.current(in:window,excluding:previous) })
             XCTAssertTrue(result)
-            let source = NSAppleScript(source: """
-              tell application "Google Chrome" to execute active tab of front window javascript "document.querySelector('iframe[title=\\"PDF with saved highlights\\"]')?.src ?? ''"
-            """)
-            var error: NSDictionary?
-            let src = source?.executeAndReturnError(&error).stringValue ?? ""
-            print("API-TRACE after", step, src.prefix(95), error?.description ?? "")
+            let src=try await exchange(["action":"evidence","step":step])
+            print("API-TRACE after",step,src.prefix(100))
             XCTAssertTrue(src.hasPrefix("blob:https://arxiv.org/"))
             let position = try XCTUnwrap(PDFReadingPosition.current(in: window))
             let delta = try XCTUnwrap(position.displacement(from: before))
             XCTAssertLessThanOrEqual(abs(delta.width), 1)
             XCTAssertLessThanOrEqual(abs(delta.height), 1)
-            try String(src).write(toFile: "/tmp/margin-hosted-frame-\(step)", atomically: true, encoding: .utf8)
         }
     }
 }

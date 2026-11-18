@@ -6,21 +6,20 @@ jobs:
   session:
     if: github.ref == 'refs/heads/test/pdf-viewport-runner'
     runs-on: macos-26-intel
-    timeout-minutes: 14
+    timeout-minutes: 15
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7
-      - name: Build and test PDF annotations
-        run: swift test --filter PDFHighlightDocumentTests
-      - name: Open the paper in the isolated runner desktop
-        run: |
-          mkdir -p "$RUNNER_TEMP/margin-profile/Default"
-          echo '{"browser":{"allow_javascript_apple_events":true}}' > "$RUNNER_TEMP/margin-profile/Default/Preferences"
-          open -na 'Google Chrome' --args --no-first-run --no-default-browser-check --disable-session-crashed-bubble --force-renderer-accessibility --user-data-dir="$RUNNER_TEMP/margin-profile" 'https://arxiv.org/pdf/2506.01844#page=4&zoom=150,0,298'
-          sleep 7
-          osascript -e 'with timeout of 8 seconds' -e 'tell application "Google Chrome" to execute active tab of front window javascript "location.href"' -e 'end timeout'
-      - name: Exercise Margin on the paper
-        env:
-          MARGIN_HOSTED_INTERACTION: 1
-        run: swift test --skip-build --filter HostedPDFInteraction
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm ci
+      - run: swift test --filter PDFHighlightDocumentTests
+      - run: node scripts/hosted-pdf-session.mjs
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: chrome-pdf-evidence
+          path: ${{ runner.temp }}/margin-evidence
+          if-no-files-found: ignore
