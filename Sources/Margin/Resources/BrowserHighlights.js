@@ -1,7 +1,7 @@
 ((request) => {
   const key = Symbol.for("com.jackboylan.margin.highlights");
   const name = "margin-saved-passages";
-  const version = 1;
+  const version = 2;
   const reply = (status, matched = 0) => JSON.stringify({ status, matched });
   if (new URL(request.url).href !== location.href) return reply("changed");
   if (!["text/html", "application/xhtml+xml"].includes(document.contentType) ||
@@ -29,7 +29,7 @@
   // Normalize complete text runs so combining characters can cross inline markup.
   function indexText() {
     const pieces = [], spans = [];
-    let length = 0, run = null, lastWasSpace = true;
+    let length = 0, run = null, lastWasSpace = true, group = 0;
     const blocks = new WeakMap();
     function flush() {
       if (!run) return;
@@ -70,11 +70,14 @@
         if (node.tagName === "BR" && run) run.raw += "\n";
         continue;
       }
+      // Browser selections skip user-select:none text, including GitHub blame gutters.
+      if (getComputedStyle(node.parentElement).userSelect === "none") { group++; continue; }
       const block = blockFor(node.parentElement);
-      if (run?.block !== block) {
+      if (run?.block !== block || run.group !== group) {
+        const newBlock = run?.block !== block;
         flush();
-        if (!lastWasSpace) { pieces.push(" "); length++; lastWasSpace = true; }
-        run = { block, raw: "", nodes: [] };
+        if (newBlock && !lastWasSpace) { pieces.push(" "); length++; lastWasSpace = true; }
+        run = { block, group, raw: "", nodes: [] };
       }
       run.nodes.push({ node, start: run.raw.length, end: run.raw.length + node.length });
       run.raw += node.data;
@@ -121,15 +124,34 @@
       const startNode = first.nodes.find(item => item.start <= from && from < item.end);
       const endNode = last.nodes.find(item => item.start < to && to <= item.end);
       if (!startNode || !endNode) continue;
-      const saved = anchors.find(item => item.quote === quote &&
-        item.range.startContainer === startNode.node && item.range.startOffset === from - startNode.start &&
-        item.range.endContainer === endNode.node && item.range.endOffset === to - endNode.start);
-      const range = saved?.range ?? document.createRange();
-      if (!saved) {
-        range.setStart(startNode.node, from - startNode.start);
-        range.setEnd(endNode.node, to - endNode.start);
+      // Split around omitted text so the custom highlight also skips its glyphs.
+      let head = startNode.node, headOffset = from - startNode.start;
+      function addRange(tail, tailOffset) {
+        const saved = anchors.find(item => item.quote === quote &&
+          item.range.startContainer === head && item.range.startOffset === headOffset &&
+          item.range.endContainer === tail && item.range.endOffset === tailOffset);
+        const range = saved?.range ?? document.createRange();
+        if (!saved) {
+          range.setStart(head, headOffset);
+          range.setEnd(tail, tailOffset);
+        }
+        next.push({ range, quote });
       }
-      next.push({ range, quote });
+      if (first.group !== last.group) {
+        let previous = first;
+        for (const span of index.spans) {
+          if (span.start <= first.start) continue;
+          if (span.start > last.start) break;
+          if (span.group !== previous.group) {
+            const tail = previous.nodes.at(-1).node;
+            addRange(tail, tail.length);
+            head = span.nodes[0].node;
+            headOffset = 0;
+          }
+          previous = span;
+        }
+      }
+      addRange(endNode.node, to - endNode.start);
     }
     const retained = new Set(next.map(item => item.range));
     for (const range of highlight) if (!retained.has(range)) highlight.delete(range);
@@ -161,7 +183,7 @@
       quotes = nextQuotes;
       // Stylesheet rules can change visibility without a DOM mutation.
       paint();
-      return reply("owned", anchors.length);
+      return reply("owned", new Set(anchors.map(item => item.quote)).size);
     },
     dispose() {
       observer.disconnect();

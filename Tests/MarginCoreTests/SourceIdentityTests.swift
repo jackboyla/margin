@@ -29,6 +29,18 @@ final class SourceIdentityTests: XCTestCase {
                        identity("https://example.com/read?token=a%2Bb&filter=x%20y"))
     }
 
+    func testGitHubHighlightsSurviveLineAndHeadingLinks() {
+        let page = "https://github.com/owner/repo/blob/main/file.md"
+        let h = Highlight(documentID: identity(page + "#L10-L12"), quote: "saved quote", contextText: "")
+        let library = LibraryState(highlights: [h])
+        XCTAssertEqual(library.highlights(for: identity(page)), [h])
+        XCTAssertEqual(library.highlights(for: identity(page + "#heading")), [h])
+        XCTAssertEqual(library.highlights(for: identity(page + "?plain=1")), [])
+        XCTAssertEqual(library.highlights(for: identity(page + "2")), [])
+        let routed = Highlight(documentID: identity("https://owner.github.io/#/one"), quote: "quote", contextText: "")
+        XCTAssertEqual(LibraryState(highlights: [routed]).highlights(for: identity("https://owner.github.io/#/two")), [])
+    }
+
     func testWindowFallbackIncludesBothAppAndTitleWithoutSeparatorCollisions() {
         XCTAssertNotEqual(identity(nil, bundleID: "app.one"), identity(nil, bundleID: "app.two"))
         XCTAssertNotEqual(identity(nil, title: "First"), identity(nil, title: "Second"))

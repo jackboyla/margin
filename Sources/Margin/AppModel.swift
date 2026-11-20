@@ -247,7 +247,7 @@ final class AppModel: ObservableObject {
         }
         try await update { library in
             Self.upsert(source, in: &library)
-            if !library.highlights.contains(where: { $0.documentID == source.documentID && $0.quote == quote }) {
+            if !library.highlights(for: source.documentID).contains(where: { $0.quote == quote }) {
                 library.highlights.append(Highlight(documentID: source.documentID, quote: quote, contextText: source.text))
             }
         }
@@ -329,7 +329,7 @@ final class AppModel: ObservableObject {
         liveAnswer = ""
         activity = configuration.backend == .openAI ? "Connecting to \(configuration.api.model)…" : "Starting \(configuration.backend == .claude ? "Claude Code" : "Codex")…"
         error = nil
-        let saved = library.highlights.filter { $0.documentID == source.documentID }
+        let saved = library.highlights(for: source.documentID)
         let prompt = Self.prompt(question: question, source: source, highlights: saved)
         let imagePath = availableImage(for: source)
         if source.screenshotPath != nil, imagePath == nil {

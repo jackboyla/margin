@@ -141,7 +141,7 @@ final class HighlightOverlays {
                             window.orderOut(nil)
                         }
                         let key = SourceIdentity.documentID(bundleID: target.bundleID, title: target.title, url: target.url)
-                        let quotes = model.library.highlights.filter { $0.documentID == key }.map(\.quote)
+                        let quotes = model.library.highlights(for: key).map(\.quote)
                         let stickyURL = target.url.map(WindowCapture.stickyURL)
                         let notes = model.library.stickyNotes.filter { $0.url == stickyURL }
                         let paint = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes, notes: notes) {

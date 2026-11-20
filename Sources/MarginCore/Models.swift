@@ -149,6 +149,16 @@ public struct LibraryState: Codable, Sendable, Equatable {
     public var threads: [ThreadRecord]
     public var stickyNotes: [StickyNote]
 
+    public func highlights(for documentID: String) -> [Highlight] {
+        // GitHub links to headings, comments and lines within the same document.
+        // Compare the stored IDs here so highlights saved with older fragment URLs still appear.
+        guard documentID.hasPrefix("url:https://github.com/") else {
+            return highlights.filter { $0.documentID == documentID }
+        }
+        let page = documentID.prefix { $0 != "#" }
+        return highlights.filter { $0.documentID.prefix { $0 != "#" } == page }
+    }
+
     public init(schemaVersion: Int = 1, documents: [DocumentRecord] = [],
                 highlights: [Highlight] = [], threads: [ThreadRecord] = [],
                 stickyNotes: [StickyNote] = []) {

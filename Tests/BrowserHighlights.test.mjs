@@ -314,3 +314,21 @@ test('saving PDF highlights preserves the visible text, zoom and reading positio
   await page.reload();
   assert.equal(await run('status', 'restored'), 'notPDF');
 });
+
+test('a multiline code selection excludes unselectable line numbers from every painted range', async t => {
+  const page = await setup(t);
+  await page.setContent('<div><span style="user-select:none">1</span><code>#ifndef STRBUF_H</code></div>' +
+    '<div><span style="user-select:none">2</span><code>#define STRBUF_H</code></div>');
+  const selected = await page.evaluate(() => {
+    const lines = document.querySelectorAll('code');
+    const range = new Range();
+    range.setStartBefore(lines[0].firstChild);
+    range.setEndAfter(lines[1].lastChild);
+    getSelection().addRange(range);
+    return getSelection().toString();
+  });
+  assert.deepEqual(selected.split(/\s+/), ['#ifndef', 'STRBUF_H', '#define', 'STRBUF_H']);
+  assert.equal((await install(page, [selected])).matched, 1);
+  assert.deepEqual(await page.evaluate(() => [...CSS.highlights.get('margin-saved-passages')].map(r => r.toString())),
+    ['#ifndef STRBUF_H', '#define STRBUF_H']);
+});
