@@ -48,6 +48,7 @@ struct SettingsView: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     shortcut("Ask beside the cursor", keys: "⌃⇧Space")
+                    shortcut("Sticky note at pointer", keys: "⌃⇧N")
                     shortcut("Save selected text", keys: "⌃⇧S")
                     shortcut("Threads and highlights", keys: "⌃⇧H")
                     shortcut("Close the panel", keys: "Esc")

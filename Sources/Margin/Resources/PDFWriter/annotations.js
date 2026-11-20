@@ -1,5 +1,5 @@
 async function highlightIncrement(original, marks) {
-  const { PDFDocument, PDFName, decodeFromBase64, encodeToBase64 } = PDFLib;
+  const { PDFDocument, PDFName, PDFString, PDFHexString, decodeFromBase64, encodeToBase64 } = PDFLib;
   const bytes = decodeFromBase64(original);
   const document = await PDFDocument.load(bytes, {
     parseSpeed: Infinity,
@@ -9,7 +9,7 @@ async function highlightIncrement(original, marks) {
   const snapshot = document.takeSnapshot();
   const pages = document.getPages();
   const annotations = new Map();
-  for (const { page, bounds, quadPoints } of marks) {
+  for (const { page, bounds, quadPoints, text, id, appearance } of marks) {
     const target = pages[page];
     let list = annotations.get(page);
     if (!list) {
@@ -19,10 +19,21 @@ async function highlightIncrement(original, marks) {
       snapshot.markRefForSave(target.ref);
       annotations.set(page, list);
     }
-    const mark = document.context.obj({
-      Type: 'Annot', Subtype: 'Highlight', Rect: bounds, QuadPoints: quadPoints,
-      C: [1, 1, 0], CA: 0.4, F: 4,
-    });
+    let mark;
+    if (appearance) {
+      const source = await PDFDocument.load(appearance, { parseSpeed: Infinity, updateMetadata: false });
+      const [form] = await document.embedPages([source.getPage(0)]);
+      mark = document.context.obj({
+        Type: 'Annot', Subtype: 'FreeText', Rect: bounds, F: 4,
+        NM: PDFString.of(id), Contents: PDFHexString.fromText(text),
+        DA: PDFString.of('/Helv 11 Tf 0 g'), AP: { N: form.ref },
+      });
+    } else {
+      mark = document.context.obj({
+        Type: 'Annot', Subtype: 'Highlight', Rect: bounds, QuadPoints: quadPoints,
+        C: [1, 1, 0], CA: 0.4, F: 4,
+      });
+    }
     list.push(document.context.register(mark));
   }
   // CoreGraphics can drop an update when a table-based PDF switches to a cross-reference stream,

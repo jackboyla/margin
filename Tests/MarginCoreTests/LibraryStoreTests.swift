@@ -174,7 +174,9 @@ final class LibraryStoreTests: XCTestCase {
             ], agent: AgentConfiguration())])
         let legacy = directory.appendingPathComponent("library.json")
         let backup = directory.appendingPathComponent("library.json.migrated")
-        let bytes = try JSONEncoder().encode(original)
+        var legacyState = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(original)) as? [String: Any])
+        legacyState.removeValue(forKey: "stickyNotes")
+        let bytes = try JSONSerialization.data(withJSONObject: legacyState)
         try bytes.write(to: legacy)
         let store = try LibraryStore(directory: directory)
         var expected = original
@@ -198,6 +200,64 @@ final class LibraryStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testBeta9DatabaseMigratesAndStickyNotesPersistIndependently() async throws {
+        let directory = try temporaryDirectory()
+        let store = try LibraryStore(directory: directory)
+        try await store.update {
+            $0.documents.append(DocumentRecord(id: "paper", title: "Paper", appName: "Preview"))
+            $0.highlights.append(Highlight(documentID: "paper", quote: "Old highlight"))
+            $0.threads.append(ThreadRecord(documentID: "paper", messages: [
+                ChatMessage(role: .assistant, body: "Old answer"),
+            ]))
+        }
+        let beta9State = store.state
+        // The remaining tables match beta9's schema after removing the sole addition.
+        try sql("DROP TABLE sticky_notes; PRAGMA user_version = 1", in: directory)
+
+        // A failed upgrade must leave version 1 available for a retry after repair.
+        try sql("UPDATE documents SET title = X'FF'", in: directory)
+        XCTAssertThrowsError(try LibraryStore(directory: directory))
+        try sql("CREATE TABLE sticky_notes (probe INTEGER); DROP TABLE sticky_notes", in: directory)
+        try sql("UPDATE documents SET title = 'Paper'", in: directory)
+        let migrated = try LibraryStore(directory: directory)
+        XCTAssertEqual(migrated.state, beta9State)
+
+        let webURL = "https://example.com/paper"
+        let web = StickyNote(url: webURL, text: "Read this next\0📌",
+                             anchor: StickyAnchor(x: 10, y: 280, element: "#intro"))
+        let sibling = StickyNote(url: webURL, text: "Follow up",
+                                 anchor: StickyAnchor(x: 20, y: 520))
+        let pdf = StickyNote(url: "file:///paper.pdf", text: "Verify theorem",
+                             anchor: StickyAnchor(x: 0.25, y: 0.5, page: 2))
+        try await migrated.update { $0.stickyNotes = [web, sibling, pdf] }
+        var expected = beta9State
+        expected.stickyNotes = [web, sibling, pdf]
+        let reopened = try LibraryStore(directory: directory)
+        XCTAssertEqual(reopened.state, expected)
+
+        try sql("CREATE TRIGGER reject_sticky BEFORE INSERT ON sticky_notes BEGIN SELECT RAISE(ABORT, 'write rejected'); END", in: directory)
+        do {
+            try await reopened.update {
+                $0.documents[0].title = "Must roll back with failed note"
+                $0.stickyNotes.removeAll { $0.id == web.id }
+                $0.stickyNotes[0].text = "Must roll back"
+            }
+            XCTFail("A failed note upsert must roll back earlier writes and deletes")
+        } catch LibraryStore.StoreError.database {}
+        XCTAssertEqual(reopened.state, expected)
+        XCTAssertEqual(try LibraryStore(directory: directory).state, expected)
+
+        try sql("DROP TRIGGER reject_sticky", in: directory)
+        try await reopened.update {
+            $0.stickyNotes.removeAll { $0.id == web.id }
+            $0.stickyNotes[0].text = "Updated independently"
+        }
+        expected.stickyNotes = [sibling, pdf]
+        expected.stickyNotes[0].text = "Updated independently"
+        XCTAssertEqual(try LibraryStore(directory: directory).state, expected)
+    }
+
+    @MainActor
     func testInvalidLegacyAndUnsupportedDatabaseAreNeverReplaced() async throws {
         for contents in [Data("broken json".utf8), try JSONEncoder().encode(LibraryState(schemaVersion: 99))] {
             let directory = try temporaryDirectory()
@@ -217,7 +277,7 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertThrowsError(try LibraryStore(directory: directory)) { error in
             XCTAssertEqual(error as? LibraryStore.StoreError, .unsupportedSchema(99))
         }
-        try sql("PRAGMA user_version = 1", in: directory)
+        try sql("PRAGMA user_version = 2", in: directory)
         XCTAssertEqual(try LibraryStore(directory: directory).state, store.state)
     }
 

@@ -74,7 +74,7 @@ final class HighlightOverlays {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
                 guard !Task.isCancelled, let self else { return }
-                if self.model?.library.highlights.isEmpty == false || self.browserNeedsRetry,
+                if self.model?.library.highlights.isEmpty == false || self.model?.library.stickyNotes.isEmpty == false || self.browserNeedsRetry,
                    let target = try? self.model?.capture.currentTarget(),
                    self.model?.capture.isChromiumBrowser(target.bundleID) == true {
                     self.needsPageCheck = true
@@ -142,7 +142,9 @@ final class HighlightOverlays {
                         }
                         let key = SourceIdentity.documentID(bundleID: target.bundleID, title: target.title, url: target.url)
                         let quotes = model.library.highlights.filter { $0.documentID == key }.map(\.quote)
-                        let paint = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes) {
+                        let stickyURL = target.url.map(WindowCapture.stickyURL)
+                        let notes = model.library.stickyNotes.filter { $0.url == stickyURL }
+                        let paint = try await model.capture.paintBrowserHighlights(target: target, quotes: quotes, notes: notes) {
                             self.generation == revision && self.viewportRevision == viewport
                         }
                         guard generation == revision else { continue }

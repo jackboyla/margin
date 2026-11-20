@@ -1,6 +1,7 @@
 import AppKit
 import CoreText
 import JavaScriptCore
+import MarginCore
 import PDFKit
 import XCTest
 @testable import Margin
@@ -41,6 +42,22 @@ final class PDFHighlightDocumentTests: XCTestCase {
         XCTAssertNil(PDFReadingPosition.lineDisplacement(staged, from: original))
     }
 
+    func testStickyPointUsesPaperCoordinatesOnAPartlyVisiblePage() throws {
+        let crop = CGRect(x: 20, y: 10, width: 400, height: 600)
+        let samples = [80, 200, 330, 510].map { y -> (paper: CGRect, screen: CGRect) in
+            let paper = CGRect(x: 40, y: y, width: 160, height: 10)
+            // Chrome displays this crop at twice its PDF size with the top 400 points scrolled away.
+            let screen = CGRect(x: 140, y: -400 + 2 * (crop.maxY - paper.maxY), width: 320, height: 20)
+            return (paper, screen)
+        }
+        let cursor = CGPoint(x: 300, y: 200)
+        let note = try XCTUnwrap(PDFReadingPosition.stickyAnchor(at: cursor, page: 2, crop: crop, samples: samples))
+        XCTAssertEqual(note, StickyAnchor(x: 0.25, y: 0.5, page: 2))
+        XCTAssertNil(PDFReadingPosition.stickyAnchor(at: .zero, page: 2, crop: crop, samples: samples))
+        let rotated = samples.map { (paper: $0.paper, screen: $0.screen.applying(CGAffineTransform(scaleX: -1, y: -1))) }
+        XCTAssertNil(PDFReadingPosition.stickyAnchor(at: cursor, page: 2, crop: crop, samples: rotated))
+    }
+
     func testOnlySelectedWordsOnEachLineReceiveMarkup() throws {
         let data = NSMutableData()
         var size = CGRect(x: 0, y: 0, width: 480, height: 560)
@@ -74,9 +91,20 @@ final class PDFHighlightDocumentTests: XCTestCase {
             """)
         let encoded = try XCTUnwrap(js.objectForKeyedSubscript("compressed")?.toString())
         let compressed = try XCTUnwrap(Data(base64Encoded: encoded))
-        let update = try XCTUnwrap(PDFHighlightDocument.annotationUpdate(for: compressed, quotes: ["first line"]))
+        let note = StickyNote(url: "https://arxiv.org/pdf/2506.01844", text: "Check β and 東京",
+                              anchor: StickyAnchor(x: 0.25, y: 0.5, page: 1))
+        let update = try XCTUnwrap(PDFHighlightDocument.annotationUpdate(for: compressed, quotes: ["first line"], notes: [note]))
         let compressedPage = try XCTUnwrap(PDFDocument(data: compressed + update)?.page(at: 0))
         XCTAssertEqual(compressedPage.annotations.filter { $0.type == "Highlight" }.count, 1)
+
+        let sticky = try XCTUnwrap(compressedPage.annotations.first { $0.type == "FreeText" })
+        XCTAssertEqual(sticky.contents, note.text)
+        XCTAssertEqual(sticky.bounds.minX, 120, accuracy: 0.1)
+        XCTAssertEqual(sticky.bounds.maxY, 280, accuracy: 0.1)
+        XCTAssertTrue(sticky.hasAppearanceStream)
+        let noteOnly = try XCTUnwrap(PDFHighlightDocument.annotationUpdate(for: original, quotes: [], notes: [note]))
+        let noteOnlyPage = try XCTUnwrap(PDFDocument(data: original + noteOnly)?.page(at: 0))
+        XCTAssertEqual(Set(noteOnlyPage.annotations.compactMap(\.type)), ["Link", "FreeText"])
 
         let form = try XCTUnwrap(PDFDocument(data: original))
         let field = PDFAnnotation(bounds: CGRect(x: 30, y: 60, width: 180, height: 24),

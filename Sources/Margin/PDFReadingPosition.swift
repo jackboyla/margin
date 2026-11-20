@@ -1,5 +1,7 @@
 import ApplicationServices
 import Foundation
+import MarginCore
+import PDFKit
 
 /// A reading position sampled from Chrome's PDF accessibility tree in screen points.
 struct PDFReadingPosition {
@@ -8,7 +10,7 @@ struct PDFReadingPosition {
     private let viewer: AXUIElement
     private let lines: [String: CGRect]
 
-    static func current(in window: AXUIElement, excluding previous: Self? = nil) -> Self? {
+    static func current(in window: AXUIElement, excluding previous: Self? = nil, at point: CGPoint? = nil) -> Self? {
         var viewers: [AXUIElement] = []
         guard walk(window, reading: ["AXURL"], visit: { node, attributes in
             if attributes[0] as? String == "AXWebArea",
@@ -19,7 +21,13 @@ struct PDFReadingPosition {
             }
             return true
         }), viewers.count == 1 else { return nil }
-        return read(viewers[0])
+        guard let point else { return read(viewers[0]) }
+        var pid: pid_t = 0
+        var hit: AXUIElement?
+        guard AXUIElementGetPid(window, &pid) == .success,
+              AXUIElementCopyElementAtPosition(AXUIElementCreateApplication(pid), Float(point.x), Float(point.y), &hit) == .success,
+              let hit else { return nil }
+        return read(viewers[0], hit: hit)
     }
 
     func sharesViewer(with other: Self) -> Bool { CFEqual(viewer, other.viewer) }
@@ -51,7 +59,7 @@ struct PDFReadingPosition {
         return shift
     }
 
-    private static func read(_ viewer: AXUIElement) -> Self? {
+    private static func read(_ viewer: AXUIElement, hit: AXUIElement? = nil) -> Self? {
         var pageNumbers: [Int] = [], zoomLevels: [Int] = []
         var pages: [Int: AXUIElement] = [:]
         var duplicatePage = false
@@ -82,8 +90,26 @@ struct PDFReadingPosition {
             return true
         }), !duplicatePage, editControls["Draw"] == true, editControls["Undo"] == true,
               editControls["Redo"] == true, editControls["Add text annotations"] != false,
-              pageNumbers.count == 1, zoomLevels.count == 1,
-              let page = pages[pageNumbers[0]] else { return nil }
+              pageNumbers.count == 1, zoomLevels.count == 1 else { return nil }
+
+        var pageNumber = pageNumbers[0]
+        if let hit {
+            var ancestor = hit
+            var matched: Int?
+            for _ in 0..<32 {
+                if let entry = pages.first(where: { CFEqual($0.value, ancestor) }) {
+                    matched = entry.key
+                    break
+                }
+                var parent: CFTypeRef?
+                guard AXUIElementCopyAttributeValue(ancestor, kAXParentAttribute as CFString, &parent) == .success,
+                      let parent, CFGetTypeID(parent) == AXUIElementGetTypeID() else { break }
+                ancestor = unsafeBitCast(parent, to: AXUIElement.self)
+            }
+            guard let matched else { return nil }
+            pageNumber = matched
+        }
+        guard let page = pages[pageNumber] else { return nil }
 
         var lines: [String: CGRect] = [:]
         var seen: Set<String> = []
@@ -108,7 +134,49 @@ struct PDFReadingPosition {
             }
             return false
         }), lines.count >= 2 else { return nil }
-        return Self(pageNumber: pageNumbers[0], zoomPercent: zoomLevels[0], viewer: viewer, lines: lines)
+        return Self(pageNumber: pageNumber, zoomPercent: zoomLevels[0], viewer: viewer, lines: lines)
+    }
+
+    func stickyAnchor(at point: CGPoint, in bytes: Data) -> StickyAnchor? {
+        guard let document = PDFDocument(data: bytes), pageNumber > 0, pageNumber <= document.pageCount,
+              let page = document.page(at: pageNumber - 1), page.rotation == 0,
+              let text = page.string as NSString? else { return nil }
+        // Chrome clips page-group frames to the viewport. Its text-range bounds stay in full screen coordinates.
+        let samples = lines.compactMap { line, screen -> (paper: CGRect, screen: CGRect)? in
+            let match = text.range(of: line, options: .literal)
+            guard screen.width > 1, match.location != NSNotFound, NSMaxRange(match) <= page.numberOfCharacters,
+                  match == text.range(of: line, options: [.literal, .backwards]),
+                  let selection = page.selection(for: match) else { return nil }
+            let rect = selection.bounds(for: page)
+            guard rect.width >= 36, rect.height > 0, !rect.isInfinite else { return nil }
+            return (rect, screen)
+        }
+        return Self.stickyAnchor(at: point, page: pageNumber, crop: page.bounds(for: .cropBox), samples: samples)
+    }
+
+    static func stickyAnchor(at point: CGPoint, page: Int, crop: CGRect,
+                             samples: [(paper: CGRect, screen: CGRect)]) -> StickyAnchor? {
+        guard samples.count >= 3, !crop.isEmpty, !crop.isInfinite else { return nil }
+        let middle = samples.count / 2
+        let scale = samples.map { $0.screen.width / $0.paper.width }.sorted()[middle]
+        guard scale.isFinite, scale > 0 else { return nil }
+        let origins = samples.map {
+            CGPoint(x: $0.screen.midX - scale * ($0.paper.midX - crop.minX),
+                    y: $0.screen.midY - scale * (crop.maxY - $0.paper.midY))
+        }
+        let origin = CGPoint(x: origins.map(\.x).sorted()[middle], y: origins.map(\.y).sorted()[middle])
+        // PDFKit and PDFium round glyph bounds differently. Require agreement across separate lines.
+        let tolerance = max(2, 3 * scale)
+        let agreeing = samples.indices.filter {
+            abs(origins[$0].x - origin.x) <= tolerance && abs(origins[$0].y - origin.y) <= tolerance
+        }
+        guard agreeing.count >= 3, agreeing.count * 2 > samples.count,
+              let top = agreeing.map({ samples[$0].paper.midY }).max(),
+              let bottom = agreeing.map({ samples[$0].paper.midY }).min(), top - bottom > 24 else { return nil }
+        let x = (point.x - origin.x) / (crop.width * scale)
+        let y = (point.y - origin.y) / (crop.height * scale)
+        guard (0...1).contains(x), (0...1).contains(y) else { return nil }
+        return StickyAnchor(x: x, y: y, page: page)
     }
 
     private static func bounds(_ node: AXUIElement, range: NSRange) -> CGRect? {

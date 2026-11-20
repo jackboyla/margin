@@ -20,31 +20,43 @@ final class SQLiteLibrary {
         do {
             sqlite3_busy_timeout(handle, 100)
             try execute("PRAGMA foreign_keys = ON")
-            var version = 0
-            try rows("PRAGMA user_version") { version = Int(sqlite3_column_int($0, 0)) }
-            guard version == 0 || version == 1 else {
-                throw LibraryStore.StoreError.unsupportedSchema(version)
-            }
+            let version = try readVersion()
             try execute("PRAGMA journal_mode = WAL")
             try execute("PRAGMA synchronous = FULL")
             let legacyURL = directory.appendingPathComponent("library.json")
-            if version == 0 {
+            if version < 2 {
                 try transaction {
-                    var tableCount = 0
-                    try rows("SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'") {
-                        tableCount = Int(sqlite3_column_int($0, 0))
+                    // Another opener may have migrated while this connection waited for the write lock.
+                    let version = try readVersion()
+                    guard version < 2 else { return }
+                    if version == 0 {
+                        var tableCount = 0
+                        try rows("SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'") {
+                            tableCount = Int(sqlite3_column_int($0, 0))
+                        }
+                        guard tableCount == 0 else { throw LibraryStore.StoreError.invalidLibrary }
+                        try createSchema()
                     }
-                    guard tableCount == 0 else { throw LibraryStore.StoreError.invalidLibrary }
-                    let hasLegacy = FileManager.default.fileExists(atPath: legacyURL.path)
-                    let initial = hasLegacy
-                        ? try JSONDecoder().decode(LibraryState.self, from: Data(contentsOf: legacyURL))
-                        : LibraryState()
-                    try validate(initial)
-                    try createSchema()
-                    try execute("INSERT INTO metadata VALUES (1, ?, ?)", [.text(UUID().uuidString), .integer(hasLegacy ? 1 : 0)])
-                    try updateRows(initial, previous: LibraryState())
-                    guard try readState() == initial else { throw LibraryStore.StoreError.invalidLibrary }
-                    try execute("PRAGMA user_version = 1")
+                    try execute("""
+                        CREATE TABLE sticky_notes (
+                            id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL,
+                            url TEXT NOT NULL, text TEXT NOT NULL, anchor_json TEXT NOT NULL
+                        )
+                        """)
+                    if version == 0 {
+                        let hasLegacy = FileManager.default.fileExists(atPath: legacyURL.path)
+                        let initial = hasLegacy
+                            ? try JSONDecoder().decode(LibraryState.self, from: Data(contentsOf: legacyURL))
+                            : LibraryState()
+                        try validate(initial)
+                        try execute("INSERT INTO metadata VALUES (1, ?, ?)", [.text(UUID().uuidString), .integer(hasLegacy ? 1 : 0)])
+                        try updateRows(initial, previous: LibraryState())
+                        guard try readState() == initial else { throw LibraryStore.StoreError.invalidLibrary }
+                    } else {
+                        _ = try readState()
+                        _ = try readRevision()
+                    }
+                    try execute("PRAGMA user_version = 2")
                 }
             }
             // The committed marker lets a restart finish the rename without importing twice.
@@ -66,6 +78,13 @@ final class SQLiteLibrary {
     }
 
     deinit { sqlite3_close_v2(handle) }
+
+    private func readVersion() throws -> Int {
+        var version = 0
+        try rows("PRAGMA user_version") { version = Int(sqlite3_column_int($0, 0)) }
+        guard (0...2).contains(version) else { throw LibraryStore.StoreError.unsupportedSchema(version) }
+        return version
+    }
 
     func load() throws -> (state: LibraryState, revision: String) {
         try transaction(immediate: false) {
@@ -182,6 +201,16 @@ final class SQLiteLibrary {
                     ])
             }
         }
+        try reconcile(state.stickyNotes, previous: previous.stickyNotes, delete: { id in
+            try execute("DELETE FROM sticky_notes WHERE id = ?", [.text(id.uuidString)])
+        }) { position, note, _ in
+            let anchor = String(decoding: try JSONEncoder().encode(note.anchor), as: UTF8.self)
+            try execute("""
+                INSERT INTO sticky_notes VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET position = excluded.position, url = excluded.url,
+                    text = excluded.text, anchor_json = excluded.anchor_json
+                """, [.text(note.id.uuidString), .integer(position), .text(note.url), .text(note.text), .text(anchor)])
+        }
     }
 
     private func reconcile<Record: Identifiable & Equatable>(
@@ -238,6 +267,11 @@ final class SQLiteLibrary {
             state.threads[index].messages.append(try ChatMessage(id: uuid(row, 1), role: role,
                 body: text(row, 3), status: status, createdAt: date(row, 5),
                 context: decode(SourceContext.self, from: optionalText(row, 6))))
+        }
+        try rows("SELECT id, url, text, anchor_json FROM sticky_notes ORDER BY position") { row in
+            let anchor = try JSONDecoder().decode(StickyAnchor.self, from: Data(text(row, 3).utf8))
+            state.stickyNotes.append(try StickyNote(id: uuid(row, 0), url: text(row, 1),
+                text: text(row, 2), anchor: anchor))
         }
         return state
     }

@@ -31,6 +31,8 @@ Saving selected text requires Device Control (Accessibility on macOS 26), indepe
 ## Use
 
 - **Control–Shift–Space** starts a fresh question beside the pointer. Select text first to ask about that passage, or leave the selection empty to ask about the window. Continue existing conversations from the sidebar.
+- **Control–Shift–N** opens a sticky note at the pointer in Chrome. Type and press **Command–Return** to save. You can also choose **Place sticky note…** from Margin’s menu and click the spot.
+- In the sidebar’s **Notes** tab, select a note to edit, move or delete it. Choose **Move…**, click a new spot on the original page, then save. On regular webpages, pressing **Control–Shift–N** over an existing note opens it for editing.
 - **Control–Shift–S** saves the selected passage without opening a conversation or contacting a model. A brief confirmation appears beside the pointer.
 - Drag the question box by its header to move it.
 - You can type and press **Ask** while page context loads; Margin waits for the verified source before contacting the model.
@@ -47,7 +49,7 @@ The API presets cover OpenAI, Claude's OpenAI compatibility endpoint, Ollama, an
 
 ## Library
 
-Notes save immediately in a local SQLite database. Document records, captured text, highlights, and conversations stay on this Mac, alongside window images. Codex and Claude Code keep their own session files. Existing JSON libraries migrate automatically. See [storage, migration, and backups](docs/storage.md).
+Sticky notes, including their page positions, save in a local SQLite database. Document records, captured text, highlights, and conversations stay on this Mac, alongside window images. Codex and Claude Code keep their own session files. Existing JSON libraries migrate automatically. See [storage, migration, and backups](docs/storage.md).
 
 ## Build
 
@@ -65,6 +67,7 @@ Builds use ad-hoc signing by default. Keep the app at a stable path when grantin
 
 - The PDF workflow is tested in Chrome. Safari PDF text selection is not yet verified on macOS 26 or later.
 - Chrome webpages paint highlights inside the page. On arxiv.org PDFs, Margin asks Chrome to display a locally annotated copy in the same tab. The address bar keeps the paper’s original URL. Before showing the copy, Margin checks the page number, zoom and positions of matching lines in both viewers. If it cannot verify your place or the passage occurs more than once, the passage stays available in the sidebar. This requires JavaScript from Apple Events and macOS Accessibility. Other PDFs and apps use native overlays, which can lag during scrolling. Frames, math, columns and scanned pages can prevent painting.
+- Sticky notes support ordinary HTTP(S) webpages in Chrome and readable arXiv PDFs in Chrome’s built-in viewer. On a webpage, notes follow their page element when possible and fall back to their saved page coordinates. A note on an embedded frame follows its outer box when the main page scrolls. PDF placement requires identifiable text on the page. Notes on browser settings pages, other PDFs, and rotated or image-only PDF pages are unsupported.
 - Chrome and Safari page identity uses their URL. Other apps depend on the document URL they expose or their window title; changed titles can create separate records.
 - Each arXiv paper version has its own identity. HTML, abstract, and PDF URLs for the same identifier share a library entry; unrelated query parameters and fragment routes remain significant.
 - Shortcuts are fixed.

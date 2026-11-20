@@ -1,6 +1,6 @@
 {
   "name": "margin-browser-checks",
   "private": true,
-  "scripts": { "test:browser": "node --test Tests/BrowserHighlights.test.mjs" },
+  "scripts": { "test:browser": "node --test Tests/*.test.mjs" },
   "devDependencies": { "playwright": "1.65.1" }
 }

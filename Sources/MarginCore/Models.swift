@@ -113,17 +113,58 @@ public struct ThreadRecord: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+public struct StickyNote: Codable, Identifiable, Equatable, Sendable {
+    public var id: UUID
+    public var url: String
+    public var text: String
+    public var anchor: StickyAnchor
+
+    public init(id: UUID = UUID(), url: String, text: String, anchor: StickyAnchor) {
+        self.id = id
+        self.url = url
+        self.text = text
+        self.anchor = anchor
+    }
+}
+
+public struct StickyAnchor: Codable, Equatable, Sendable {
+    public var x: Double
+    public var y: Double
+    public var page: Int?
+    public var element: String?
+
+    /// PDF positions use normalized coordinates from the top-left of the 1-based page.
+    public init(x: Double, y: Double, page: Int? = nil, element: String? = nil) {
+        self.x = x
+        self.y = y
+        self.page = page
+        self.element = element
+    }
+}
+
 public struct LibraryState: Codable, Sendable, Equatable {
     public var schemaVersion: Int
     public var documents: [DocumentRecord]
     public var highlights: [Highlight]
     public var threads: [ThreadRecord]
+    public var stickyNotes: [StickyNote]
 
     public init(schemaVersion: Int = 1, documents: [DocumentRecord] = [],
-                highlights: [Highlight] = [], threads: [ThreadRecord] = []) {
+                highlights: [Highlight] = [], threads: [ThreadRecord] = [],
+                stickyNotes: [StickyNote] = []) {
         self.schemaVersion = schemaVersion
         self.documents = documents
         self.highlights = highlights
         self.threads = threads
+        self.stickyNotes = stickyNotes
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try values.decode(Int.self, forKey: .schemaVersion)
+        documents = try values.decode([DocumentRecord].self, forKey: .documents)
+        highlights = try values.decode([Highlight].self, forKey: .highlights)
+        threads = try values.decode([ThreadRecord].self, forKey: .threads)
+        stickyNotes = try values.decodeIfPresent([StickyNote].self, forKey: .stickyNotes) ?? []
     }
 }

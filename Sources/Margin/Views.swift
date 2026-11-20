@@ -247,6 +247,7 @@ struct ModelChoiceView: View {
 
 struct SidebarView: View {
     @ObservedObject var model: AppModel
+    var editNote: (StickyNote) -> Void
     var close: () -> Void
     @State private var filter = 0
     @State private var search = ""
@@ -287,6 +288,7 @@ struct SidebarView: View {
                     Text("Recent").tag(0)
                     Text("This page").tag(1)
                     Text("Highlights").tag(2)
+                    Text("Notes").tag(3)
                 }.pickerStyle(.segmented).controlSize(.small).labelsHidden()
                 if filter == 1 {
                     Text(model.pageContext?.title ?? "Capture a window with Control–Shift–Space first.")
@@ -294,7 +296,21 @@ struct SidebarView: View {
                 }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 3) {
-                        if filter == 2 {
+                        if filter == 3 {
+                            let notes = model.library.stickyNotes.reversed().filter {
+                                search.isEmpty || $0.text.localizedCaseInsensitiveContains(search) || $0.url.localizedCaseInsensitiveContains(search)
+                            }
+                            ForEach(notes) { note in
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Button { editNote(note) } label: {
+                                        Label(note.text, systemImage: "note.text").lineLimit(4)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }.buttonStyle(.plain).help("Edit sticky note")
+                                    SourceLink(value: note.url)
+                                }.padding(12).background(ReadingStyle.surface, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            if notes.isEmpty { empty(search.isEmpty ? "Point at a Chrome page and press ⌃⇧N to add a sticky note." : "No matching notes.") }
+                        } else if filter == 2 {
                             let highlights = model.library.highlights.sorted { $0.createdAt > $1.createdAt }
                                 .filter { search.isEmpty || $0.quote.localizedCaseInsensitiveContains(search) }
                             ForEach(highlights) { highlight in

@@ -1,6 +1,8 @@
+import ApplicationServices
 import CoreGraphics
 import CryptoKit
 import Foundation
+import MarginCore
 import os
 
 enum BrowserHighlightState {
@@ -36,10 +38,30 @@ final class ChromePDFHighlights {
         return parts.url
     }
 
-    func paint(paper: URL, quotes: [String], isCurrent: @MainActor () -> Bool,
+    func stickyAnchor(paper: URL, in window: AXUIElement, at point: CGPoint) async throws -> StickyAnchor? {
+        let sample = await Task.detached(priority: .userInitiated) {
+            let input = PDFInputSnapshot()
+            let position = PDFReadingPosition.current(in: window, at: point)
+            return PDFInputSnapshot() == input ? position : nil
+        }.value
+        guard let sample else { return nil }
+        let source = try await originalPDF(for: paper)
+        return await Task.detached(priority: .utility) {
+            sample.stickyAnchor(at: point, in: source.bytes)
+        }.value
+    }
+
+    func paint(paper: URL, quotes: [String], notes: [StickyNote] = [], isCurrent: @MainActor () -> Bool,
                command: ([String: Any], PDFInputSnapshot?) async throws -> String,
                position: (PDFReadingPosition?) async throws -> PDFReadingPosition?) async throws -> BrowserHighlightState {
-        let key = try JSONEncoder().encode([paper.absoluteString] + quotes.sorted())
+        struct PaintKey: Encodable {
+            let paper: URL
+            let quotes: [String]
+            let notes: [StickyNote]
+        }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let key = try encoder.encode(PaintKey(paper: paper, quotes: quotes.sorted(), notes: notes))
         let token = Data(SHA256.hash(data: key)).base64EncodedString()
         func send(_ action: String, _ fields: [String: Any] = [:], input: PDFInputSnapshot? = nil) async throws -> String {
             var request = fields
@@ -48,7 +70,7 @@ final class ChromePDFHighlights {
             return try await command(request, input)
         }
         let status = try await send("status")
-        if status == "active" || (status == "original" && quotes.isEmpty) {
+        if status == "active" || (status == "original" && quotes.isEmpty && notes.isEmpty) {
             return .current
         }
         if status == "notPDF" { return .unsupported }
@@ -73,7 +95,7 @@ final class ChromePDFHighlights {
             return deferPaint("paper download unavailable", delay: 8)
         }
         let update = await Task.detached(priority: .utility) {
-            PDFHighlightDocument.annotationUpdate(for: base.bytes, quotes: quotes)
+            PDFHighlightDocument.annotationUpdate(for: base.bytes, quotes: quotes, notes: notes)
         }.value
         guard isCurrent() else { return .deferred }
         if status == "original", update?.isEmpty != false {

@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let shortcuts = GlobalShortcuts()
     private var composer: FloatingPanel?
     private var sidebar: FloatingPanel?
+    private var stickyNotes: StickyNotesController?
     private var overlays: HighlightOverlays?
     private var savingHighlight = false
     private var toast: NSPanel?
@@ -30,6 +31,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let support = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             let model = try AppModel(directory: support.appendingPathComponent("Margin", isDirectory: true))
             self.model = model
+            stickyNotes = StickyNotesController(model: model) { [weak self] message, success in self?.showToast(message, success: success) }
+            shortcuts.onStickyNote = { [weak self] in self?.stickyNotes?.openAtPointer() }
             prepareComposer()
             setupMenu()
             overlays = HighlightOverlays(model: model)
@@ -59,6 +62,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(withTitle: "Ask about this window   ⌃⇧Space", action: #selector(ask), keyEquivalent: "")
         menu.addItem(withTitle: "Save selected highlight   ⌃⇧S", action: #selector(saveSelection), keyEquivalent: "")
+        menu.addItem(withTitle: "Place sticky note…", action: #selector(placeStickyNote), keyEquivalent: "")
         menu.addItem(withTitle: "Threads and highlights   ⌃⇧H", action: #selector(history), keyEquivalent: "")
         menu.addItem(withTitle: "Settings…", action: #selector(settings), keyEquivalent: "")
         menu.addItem(.separator())
@@ -77,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
     }
 
+    @objc private func placeStickyNote() { stickyNotes?.chooseSpot() }
     @objc private func ask() { showComposer() }
     @objc private func history() { toggleSidebar() }
     @objc private func settings() { model?.showingSettings = true; showSidebar(capture: false) }
@@ -175,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         composer?.orderOut(nil)
         if sidebar == nil {
             sidebar = FloatingPanel()
-            sidebar?.contentView = FirstClickHostingView(rootView: SidebarView(model: model, close: { [weak self] in self?.sidebar?.orderOut(nil) }))
+            sidebar?.contentView = FirstClickHostingView(rootView: SidebarView(model: model, editNote: { [weak self] note in self?.stickyNotes?.edit(note) }, close: { [weak self] in self?.sidebar?.orderOut(nil) }))
         }
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         let frame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)

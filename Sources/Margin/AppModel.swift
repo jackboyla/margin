@@ -253,6 +253,20 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func saveStickyNote(_ note: StickyNote) async throws {
+        try await update { library in
+            if let index = library.stickyNotes.firstIndex(where: { $0.id == note.id }) {
+                library.stickyNotes[index] = note
+            } else { library.stickyNotes.append(note) }
+        }
+        onLibraryChange?()
+    }
+
+    func deleteStickyNote(_ id: UUID) async throws {
+        try await update { $0.stickyNotes.removeAll { $0.id == id } }
+        onLibraryChange?()
+    }
+
     func removeHighlight(_ id: UUID) {
         Task {
             do {

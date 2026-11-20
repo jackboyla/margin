@@ -146,17 +146,18 @@ final class WindowCapture {
 
     private nonisolated static let browserHighlightScript = MarginResources.script("BrowserHighlights")
     private nonisolated static let pdfViewportScript = MarginResources.script("PDFViewport")
+    private nonisolated static let stickyScript = MarginResources.script("BrowserStickyNotes")
     private let pdfRenderer = ChromePDFHighlights()
 
-    func paintBrowserHighlights(target: WindowTarget, quotes: [String],
+    func paintBrowserHighlights(target: WindowTarget, quotes: [String], notes: [StickyNote] = [],
                                 isCurrent: @escaping @MainActor () -> Bool) async throws -> BrowserHighlightState {
         guard isChromiumBrowser(target.bundleID), let url = target.url else { return .unsupported }
         if let paper = ChromePDFHighlights.paperURL(url) {
             guard let template = Self.pdfViewportScript else { return .unsupported }
-            let paint = try await pdfRenderer.paint(paper: paper, quotes: quotes, isCurrent: isCurrent) { arguments, input in
+            let paint = try await pdfRenderer.paint(paper: paper, quotes: quotes, notes: notes.filter { $0.anchor.page != nil }, isCurrent: isCurrent) { arguments, input in
                 var request = arguments
                 request["url"] = url
-                return try await self.browserCommand(target, template: template, request: request, input: input)
+                return try await self.browserCommand(target, template: template, request: request, input: input).status
             } position: { excluding in
                 try await Task.detached(priority: .utility) {
                     let app = AXUIElementCreateApplication(target.pid)
@@ -168,15 +169,97 @@ final class WindowCapture {
             if paint != .unsupported { return paint }
         }
         guard let template = Self.browserHighlightScript else { return .unsupported }
-        return try await browserCommand(target, template: template, request: ["url": url, "quotes": quotes]) == "owned" ? .current : .unsupported
+        var script = "(() => { window[Symbol.for('com.jackboylan.margin.stickyNotes')]?.dispose(); return " + template + "\n})()"
+        var request: [String: Any] = ["url": url, "quotes": quotes]
+        let webNotes = notes.filter { $0.anchor.page == nil }
+        if !webNotes.isEmpty, let stickyScript = Self.stickyScript {
+            request["action"] = "paint"
+            request["notes"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(webNotes))
+            script = "(() => {\n" + stickyScript + "\nreturn " + template + "\n})()"
+        }
+        return try await browserCommand(target, template: script, request: request).status == "owned" ? .current : .unsupported
     }
 
-    private func browserCommand(_ target: WindowTarget, template: String, request: [String: Any], input: PDFInputSnapshot? = nil) async throws -> String {
+    static func stickyURL(_ url: String) -> String {
+        ChromePDFHighlights.paperURL(url)?.absoluteString ?? url
+    }
+
+    func locateStickyNote(at point: CGPoint, expected: WindowTarget? = nil) async throws -> (url: String, anchor: StickyAnchor, id: UUID?) {
+        try requireSelectionAccess()
+        let pinned = try currentTarget()
+        guard isChromiumBrowser(pinned.bundleID), pinned.frame.contains(point),
+              NSWorkspace.shared.frontmostApplication?.processIdentifier == pinned.pid else { throw StickyPlacementError.outsidePage }
+        let target = try await resolve(target: pinned)
+        if let expected, expected.windowID != target.windowID || expected.pid != target.pid ||
+            expected.url != target.url || expected.frame != target.frame { throw WindowCaptureError.sourceChanged }
+        guard let url = target.url, let scheme = URL(string: url)?.scheme,
+              ["https", "http"].contains(scheme) else { throw StickyPlacementError.outsidePage }
+        let allowed = try await queued { self.automationAllowed(target.bundleID, ask: true) }
+        guard allowed else { throw StickyPlacementError.automation }
+        let input = PDFInputSnapshot()
+        let anchor: StickyAnchor
+        var id: UUID?
+        if let paper = ChromePDFHighlights.paperURL(url) {
+            guard let template = Self.pdfViewportScript,
+                  try await browserCommand(target, template: template, request: ["url": url, "action": "status", "token": "placement"]).status != "unsupported"
+            else { throw StickyPlacementError.automation }
+            guard let window = element(AXUIElementCreateApplication(target.pid), kAXFocusedWindowAttribute),
+                  matches(window, frame: target.frame),
+                  let placement = try await pdfRenderer.stickyAnchor(paper: paper, in: window, at: point)
+            else { throw StickyPlacementError.outsidePaper }
+            anchor = placement
+        } else {
+            let viewport = try await queued { try self.webViewport(at: point, in: target) }
+            guard let template = Self.stickyScript else { throw StickyPlacementError.automation }
+            let reply = try await browserCommand(target, template: template, request: [
+                "url": url, "action": "locate", "fractionX": (point.x - viewport.minX) / viewport.width,
+                "fractionY": (point.y - viewport.minY) / viewport.height
+            ])
+            if reply.status == "notHTML" { throw StickyPlacementError.unsupported }
+            guard reply.status != "unsupported" else { throw StickyPlacementError.automation }
+            guard reply.status == "point", let placement = reply.anchor,
+                  placement.page == nil, placement.x.isFinite, placement.y.isFinite else { throw StickyPlacementError.outsidePage }
+            anchor = placement
+            id = reply.id
+        }
+        let active = try await resolve(target: pinned)
+        guard active.url == url, input == PDFInputSnapshot() else { throw WindowCaptureError.sourceChanged }
+        return (Self.stickyURL(url), anchor, id)
+    }
+
+    private nonisolated func webViewport(at point: CGPoint, in target: WindowTarget) throws -> CGRect {
+        let app = AXUIElementCreateApplication(target.pid)
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(app, Float(point.x), Float(point.y), &hit) == .success else {
+            throw StickyPlacementError.outsidePage
+        }
+        var viewport: CGRect?
+        for _ in 0..<100 {
+            guard let node = hit else { break }
+            if string(node, kAXRoleAttribute) == "AXWebArea" { viewport = frame(node) }
+            if string(node, kAXRoleAttribute) == kAXWindowRole {
+                guard matches(node, frame: target.frame), let viewport, viewport.contains(point),
+                      viewport.width > 0, viewport.height > 0 else { break }
+                return viewport
+            }
+            hit = element(node, kAXParentAttribute)
+        }
+        throw StickyPlacementError.outsidePage
+    }
+
+    private struct BrowserReply: Decodable {
+        var status: String
+        var matched: Int?
+        var anchor: StickyAnchor?
+        var id: UUID?
+    }
+
+    private func browserCommand(_ target: WindowTarget, template: String, request: [String: Any], input: PDFInputSnapshot? = nil) async throws -> BrowserReply {
         guard let url = target.url, let data = try? JSONSerialization.data(withJSONObject: request),
-              let json = String(data: data, encoding: .utf8) else { return "unsupported" }
+              let json = String(data: data, encoding: .utf8) else { return BrowserReply(status: "unsupported") }
         return try await queued {
             guard self.singleBrowser(target.bundleID, pid: target.pid),
-                  self.automationAllowed(target.bundleID, ask: false) else { return "unsupported" }
+                  self.automationAllowed(target.bundleID, ask: false) else { return BrowserReply(status: "unsupported") }
             let javascript = template.replacingOccurrences(of: "__MARGIN_REQUEST__", with: json)
             func checkWindow() throws {
                 guard let front = self.frontWindow(pid: target.pid), front.id == target.windowID,
@@ -222,23 +305,22 @@ final class WindowCapture {
             arguments.insert(NSAppleEventDescriptor(string: url), at: 2)
             event.setParam(arguments, forKeyword: AEKeyword(keyDirectObject))
             var error: NSDictionary?
-            if let input, PDFInputSnapshot() != input { return "interrupted" }
+            if let input, PDFInputSnapshot() != input { return BrowserReply(status: "interrupted") }
             let reply = script?.executeAppleEvent(event, error: &error)
             try checkWindow()
             guard self.singleBrowser(target.bundleID, pid: target.pid) else { throw WindowCaptureError.sourceChanged }
             guard error == nil, let value = reply?.stringValue else {
                 let code = (error?[NSAppleScript.errorNumber] as? NSNumber)?.intValue ?? 0
                 Self.highlightLog.info("Browser painting unavailable; AppleScript error \(code)")
-                return "unsupported"
+                return BrowserReply(status: "unsupported")
             }
             if value == "changed" { throw WindowCaptureError.sourceChanged }
-            struct Result: Decodable { let status: String; let matched: Int? }
-            guard let result = try? JSONDecoder().decode(Result.self, from: Data(value.utf8)) else { return "unsupported" }
+            guard let result = try? JSONDecoder().decode(BrowserReply.self, from: Data(value.utf8)) else { return BrowserReply(status: "unsupported") }
             if result.status == "changed" { throw WindowCaptureError.sourceChanged }
             if let matched = result.matched {
                 Self.highlightLog.info("Browser paint \(result.status, privacy: .public); matched \(matched) quotes")
             }
-            return result.status
+            return result
         }
     }
 
