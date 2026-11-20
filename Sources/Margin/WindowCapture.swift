@@ -149,9 +149,25 @@ final class WindowCapture {
     private nonisolated static let stickyScript = MarginResources.script("BrowserStickyNotes")
     private let pdfRenderer = ChromePDFHighlights()
 
-    func paintBrowserHighlights(target: WindowTarget, quotes: [String], notes: [StickyNote] = [],
+    func releaseSelection(target: WindowTarget, quote: String) async throws -> (url: String, anchor: WebQuoteAnchor)? {
+        guard isChromiumBrowser(target.bundleID), let url = target.url,
+              let script = Self.browserHighlightScript else { return nil }
+        let sourceID = "url:" + url
+        let detailURL = SourceIdentity.gitHubReleaseURL(for: sourceID)
+        guard detailURL != nil || SourceIdentity.isGitHubReleaseIndex(sourceID) else { return nil }
+        let reply = try await browserCommand(target, template: script, request: ["action": "anchor", "url": url, "quote": quote])
+        guard reply.status == "anchored", let releaseURL = reply.releaseURL,
+              let canonical = SourceIdentity.gitHubReleaseURL(for: "url:" + releaseURL),
+              canonical == detailURL || SourceIdentity.gitHubReleaseIndexContains("url:" + canonical, indexDocumentID: sourceID),
+              let prefix = reply.prefix, let suffix = reply.suffix,
+              prefix.utf8.count <= 1024, suffix.utf8.count <= 1024 else { return nil }
+        return (canonical, WebQuoteAnchor(prefix: prefix, suffix: suffix))
+    }
+
+    func paintBrowserHighlights(target: WindowTarget, highlights: [Highlight], notes: [StickyNote] = [],
                                 isCurrent: @escaping @MainActor () -> Bool) async throws -> BrowserHighlightState {
         guard isChromiumBrowser(target.bundleID), let url = target.url else { return .unsupported }
+        let quotes = highlights.map(\.quote)
         if let paper = ChromePDFHighlights.paperURL(url) {
             guard let template = Self.pdfViewportScript else { return .unsupported }
             let paint = try await pdfRenderer.paint(paper: paper, quotes: quotes, notes: notes.filter { $0.anchor.page != nil }, isCurrent: isCurrent) { arguments, input in
@@ -171,6 +187,15 @@ final class WindowCapture {
         guard let template = Self.browserHighlightScript else { return .unsupported }
         var script = "(() => { window[Symbol.for('com.jackboylan.margin.stickyNotes')]?.dispose(); return " + template + "\n})()"
         var request: [String: Any] = ["url": url, "quotes": quotes]
+        if highlights.contains(where: { $0.webAnchor != nil || SourceIdentity.gitHubReleaseURL(for: $0.documentID) != nil }) {
+            request["passages"] = highlights.map { highlight in
+                var passage = ["quote": highlight.quote]
+                passage["prefix"] = highlight.webAnchor?.prefix
+                passage["suffix"] = highlight.webAnchor?.suffix
+                passage["releaseURL"] = SourceIdentity.gitHubReleaseURL(for: highlight.documentID)
+                return passage
+            }
+        }
         let webNotes = notes.filter { $0.anchor.page == nil }
         if !webNotes.isEmpty, let stickyScript = Self.stickyScript {
             request["action"] = "paint"
@@ -250,6 +275,9 @@ final class WindowCapture {
     private struct BrowserReply: Decodable {
         var status: String
         var matched: Int?
+        var prefix: String?
+        var suffix: String?
+        var releaseURL: String?
         var anchor: StickyAnchor?
         var id: UUID?
     }

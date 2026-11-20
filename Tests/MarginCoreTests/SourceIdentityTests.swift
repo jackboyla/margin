@@ -41,6 +41,24 @@ final class SourceIdentityTests: XCTestCase {
         XCTAssertEqual(LibraryState(highlights: [routed]).highlights(for: identity("https://owner.github.io/#/two")), [])
     }
 
+    func testReleaseIndexIncludesOnlyItsRepositoryReleaseTags() {
+        let index = "https://github.com/owner/repo/releases"
+        let legacy = Highlight(documentID: identity(index + "#heading"), quote: "Old quote")
+        let release = Highlight(documentID: identity(index + "/tag/build%2F1#notes"), quote: "Release quote")
+        let unrelated = [index + "/download/v1/file", index + "/tag/v2?q=3",
+                         index + "/tag/%2e%2e", "https://github.com/owner/other/releases/tag/v1",
+                         "https://example.com/owner/repo/releases/tag/v1"].map {
+            Highlight(documentID: identity($0), quote: "Other")
+        }
+        let library = LibraryState(highlights: [legacy, release] + unrelated)
+        XCTAssertEqual(library.browserHighlights(for: identity(index)), [legacy, release])
+        XCTAssertEqual(library.browserHighlights(for: identity(index + "?page=2")), [release])
+        XCTAssertEqual(library.browserHighlights(for: identity(index + "?q=beta")), [])
+        XCTAssertEqual(library.browserHighlights(for: identity(index + "/tag/build%2F1")), [release])
+        XCTAssertEqual(library.browserHighlights(for: identity(index + "/tag/build%2F1/")), [release])
+        XCTAssertEqual(SourceIdentity.gitHubReleaseURL(for: release.documentID), index + "/tag/build%2F1")
+    }
+
     func testWindowFallbackIncludesBothAppAndTitleWithoutSeparatorCollisions() {
         XCTAssertNotEqual(identity(nil, bundleID: "app.one"), identity(nil, bundleID: "app.two"))
         XCTAssertNotEqual(identity(nil, title: "First"), identity(nil, title: "Second"))

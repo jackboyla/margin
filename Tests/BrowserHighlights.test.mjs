@@ -332,3 +332,45 @@ test('a multiline code selection excludes unselectable line numbers from every p
   assert.deepEqual(await page.evaluate(() => [...CSS.highlights.get('margin-saved-passages')].map(r => r.toString())),
     ['#ifndef STRBUF_H', '#define STRBUF_H']);
 });
+
+test('release selections keep their tag and occurrence across the release list and detail page', async t => {
+  const list = 'https://github.com/example/project/releases';
+  const tag = list + '/tag/v2';
+  const repeated = 'Download the installer.';
+  const sentence = '<p>First option: <b>Download the installer.</b> Read the guide.</p>';
+  const other = '<p>Second option: <b>Download the installer.</b> See the appendix.</p>';
+  const prose = '<div class="markdown-body">' + sentence + other + '</div>';
+  const sections = ['v1', 'v2'].map(name => '<section id="release-' + name + '"><a href="' + list + '/tag/' + name + '">' + name + '</a>' + prose + '</section>').join('');
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.route(list + '**', r => r.fulfill({ contentType: 'text/html', body: r.request().url().includes('/tag/') ? prose : sections }));
+  const run = fields => page.evaluate(source.replace('__MARGIN_REQUEST__', () => JSON.stringify({ url: page.url(), ...fields }))).then(JSON.parse);
+  const paint = async passages => (await run({passages})).matched;
+  const capture = async selector => {
+    await page.locator(selector).evaluate(e => getSelection().selectAllChildren(e));
+    const anchor = await run({ action: 'anchor', quote: repeated });
+    assert.equal(anchor.status, 'anchored');
+    await page.evaluate(() => getSelection().removeAllRanges());
+    return { quote: repeated, prefix: anchor.prefix, suffix: anchor.suffix, releaseURL: anchor.releaseURL };
+  };
+  const painted = () => page.evaluate(() => [...CSS.highlights.get('margin-saved-passages')].map(r =>
+    [r.startContainer.parentElement.closest('section')?.id, r.startContainer.parentElement.closest('p').innerText, r.toString()]));
+  await page.goto(list);
+  assert.equal((await run({ quotes: [repeated] })).matched, 0);
+  const passage = await capture('#release-v2 p:last-child b');
+  assert.equal(passage.releaseURL, tag);
+  assert.equal(await paint([passage]), 1);
+  assert.deepEqual(await painted(), [['release-v2', 'Second option: Download the installer. See the appendix.', repeated]]);
+  await page.goto(tag + '/');
+  assert.deepEqual(await capture('p:last-child b'), passage);
+  assert.equal(await paint([passage]), 1);
+  await page.locator('p:last-child').evaluate(e => e.remove());
+  await settle(page);
+  assert.deepEqual(await painted(), []);
+  await page.goto(list);
+  assert.equal(await paint([passage]), 1);
+  await page.locator('#release-v2').evaluate(e => e.remove());
+  await settle(page);
+  assert.deepEqual(await painted(), []);
+});

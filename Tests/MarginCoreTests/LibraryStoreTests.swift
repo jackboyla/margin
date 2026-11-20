@@ -27,7 +27,8 @@ final class LibraryStoreTests: XCTestCase {
         let source = SourceContext(documentID: "paper", appName: "Safari", bundleID: "com.apple.Safari",
                                    title: "A paper", url: "https://example.com/paper", text: "Full context",
                                    selection: "A useful quote")
-        let highlight = Highlight(documentID: source.documentID, quote: "A useful quote\0with a null and ' quote", contextText: source.text)
+        let highlight = Highlight(documentID: source.documentID, quote: "A useful quote\0with a null and ' quote", contextText: source.text,
+                                  webAnchor: WebQuoteAnchor(prefix: "before", suffix: "after"))
         let store = try LibraryStore(directory: directory)
         try await store.update {
             $0.documents.append(DocumentRecord(id: source.documentID, title: source.title,
@@ -211,8 +212,8 @@ final class LibraryStoreTests: XCTestCase {
             ]))
         }
         let beta9State = store.state
-        // The remaining tables match beta9's schema after removing the sole addition.
-        try sql("DROP TABLE sticky_notes; PRAGMA user_version = 1", in: directory)
+        // Remove later schema additions to exercise the beta 9 upgrade.
+        try sql("ALTER TABLE highlights DROP COLUMN web_anchor_json; DROP TABLE sticky_notes; PRAGMA user_version = 1", in: directory)
 
         // A failed upgrade must leave version 1 available for a retry after repair.
         try sql("UPDATE documents SET title = X'FF'", in: directory)
@@ -234,6 +235,9 @@ final class LibraryStoreTests: XCTestCase {
         expected.stickyNotes = [web, sibling, pdf]
         let reopened = try LibraryStore(directory: directory)
         XCTAssertEqual(reopened.state, expected)
+
+        try sql("ALTER TABLE highlights DROP COLUMN web_anchor_json; PRAGMA user_version = 2", in: directory)
+        XCTAssertEqual(try LibraryStore(directory: directory).state, expected)
 
         try sql("CREATE TRIGGER reject_sticky BEFORE INSERT ON sticky_notes BEGIN SELECT RAISE(ABORT, 'write rejected'); END", in: directory)
         do {
@@ -277,7 +281,7 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertThrowsError(try LibraryStore(directory: directory)) { error in
             XCTAssertEqual(error as? LibraryStore.StoreError, .unsupportedSchema(99))
         }
-        try sql("PRAGMA user_version = 2", in: directory)
+        try sql("PRAGMA user_version = 3", in: directory)
         XCTAssertEqual(try LibraryStore(directory: directory).state, store.state)
     }
 

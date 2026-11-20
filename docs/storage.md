@@ -6,7 +6,7 @@ Margin saves locally in `~/Library/Application Support/Margin/`. Notes remain av
 
 SQLite commits library changes in transactions. After a restart, unfinished replies become interrupted and do not restart themselves. A corrupt or unsupported library produces an error without replacing its saved contents.
 
-Beta 10 adds a sticky-note table when it first opens a beta 9 library. Existing documents, highlights, and threads are preserved. To use beta 9 again with the earlier database format, restore a backup made before upgrading.
+Margin upgrades older SQLite libraries in place. It keeps existing records and adds space for the text before and after a browser highlight. To reopen a library in an older app version, restore a backup made before upgrading.
 
 ## Existing JSON libraries
 

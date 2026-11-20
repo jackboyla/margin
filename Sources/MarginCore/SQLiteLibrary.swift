@@ -24,11 +24,11 @@ final class SQLiteLibrary {
             try execute("PRAGMA journal_mode = WAL")
             try execute("PRAGMA synchronous = FULL")
             let legacyURL = directory.appendingPathComponent("library.json")
-            if version < 2 {
+            if version < 3 {
                 try transaction {
                     // Another opener may have migrated while this connection waited for the write lock.
                     let version = try readVersion()
-                    guard version < 2 else { return }
+                    guard version < 3 else { return }
                     if version == 0 {
                         var tableCount = 0
                         try rows("SELECT count(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'") {
@@ -37,12 +37,15 @@ final class SQLiteLibrary {
                         guard tableCount == 0 else { throw LibraryStore.StoreError.invalidLibrary }
                         try createSchema()
                     }
-                    try execute("""
-                        CREATE TABLE sticky_notes (
-                            id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL,
-                            url TEXT NOT NULL, text TEXT NOT NULL, anchor_json TEXT NOT NULL
-                        )
-                        """)
+                    if version < 2 {
+                        try execute("""
+                            CREATE TABLE sticky_notes (
+                                id TEXT PRIMARY KEY NOT NULL, position INTEGER NOT NULL,
+                                url TEXT NOT NULL, text TEXT NOT NULL, anchor_json TEXT NOT NULL
+                            )
+                            """)
+                    }
+                    try execute("ALTER TABLE highlights ADD COLUMN web_anchor_json TEXT")
                     if version == 0 {
                         let hasLegacy = FileManager.default.fileExists(atPath: legacyURL.path)
                         let initial = hasLegacy
@@ -56,7 +59,7 @@ final class SQLiteLibrary {
                         _ = try readState()
                         _ = try readRevision()
                     }
-                    try execute("PRAGMA user_version = 2")
+                    try execute("PRAGMA user_version = 3")
                 }
             }
             // The committed marker lets a restart finish the rename without importing twice.
@@ -82,7 +85,7 @@ final class SQLiteLibrary {
     private func readVersion() throws -> Int {
         var version = 0
         try rows("PRAGMA user_version") { version = Int(sqlite3_column_int($0, 0)) }
-        guard (0...2).contains(version) else { throw LibraryStore.StoreError.unsupportedSchema(version) }
+        guard (0...3).contains(version) else { throw LibraryStore.StoreError.unsupportedSchema(version) }
         return version
     }
 
@@ -165,12 +168,14 @@ final class SQLiteLibrary {
             try execute("DELETE FROM highlights WHERE id = ?", [.text(id.uuidString)])
         }) { position, highlight, _ in
             try execute("""
-                INSERT INTO highlights VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO highlights VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET position = excluded.position, document_id = excluded.document_id,
-                    quote = excluded.quote, context_text = excluded.context_text, created_at = excluded.created_at
+                    quote = excluded.quote, context_text = excluded.context_text, created_at = excluded.created_at,
+                    web_anchor_json = excluded.web_anchor_json
                 """, [
                     .text(highlight.id.uuidString), .integer(position), .text(highlight.documentID),
                     .text(highlight.quote), .text(highlight.contextText), .real(highlight.createdAt.timeIntervalSinceReferenceDate),
+                    .optional(try json(highlight.webAnchor)),
                 ])
         }
         try reconcile(state.threads, previous: previous.threads, delete: { id in
@@ -243,9 +248,10 @@ final class SQLiteLibrary {
             state.documents.append(try DocumentRecord(id: text(row, 0), title: text(row, 1),
                 url: optionalText(row, 2), appName: text(row, 3), updatedAt: date(row, 4)))
         }
-        try rows("SELECT id, document_id, quote, context_text, created_at FROM highlights ORDER BY position") { row in
+        try rows("SELECT id, document_id, quote, context_text, created_at, web_anchor_json FROM highlights ORDER BY position") { row in
             state.highlights.append(try Highlight(id: uuid(row, 0), documentID: text(row, 1),
-                quote: text(row, 2), contextText: text(row, 3), createdAt: date(row, 4)))
+                quote: text(row, 2), contextText: text(row, 3), createdAt: date(row, 4),
+                webAnchor: decode(WebQuoteAnchor.self, from: optionalText(row, 5))))
         }
         try rows("SELECT id, document_id, title, created_at, updated_at, provider_session_id, agent_json FROM threads ORDER BY position") { row in
             state.threads.append(try ThreadRecord(id: uuid(row, 0), documentID: text(row, 1), title: text(row, 2),

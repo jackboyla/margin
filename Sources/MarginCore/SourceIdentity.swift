@@ -33,6 +33,56 @@ public enum SourceIdentity {
         return "window:\(bundleID.utf8.count):\(bundleID)\(title.utf8.count):\(title)"
     }
 
+    public static func gitHubReleaseURL(for documentID: String) -> String? {
+        guard let release = gitHubReleasePage(documentID), release.isTag else { return nil }
+        return release.url
+    }
+
+    public static func isGitHubReleaseIndex(_ documentID: String) -> Bool {
+        gitHubReleaseIndex(for: documentID) != nil
+    }
+
+    public static func gitHubReleaseIndexContains(_ releaseDocumentID: String, indexDocumentID: String) -> Bool {
+        guard let index = gitHubReleaseIndex(for: indexDocumentID) else { return false }
+        return gitHubReleaseIndex(forTag: releaseDocumentID) == index
+    }
+
+    static func gitHubReleaseIndex(for documentID: String) -> String? {
+        guard let page = gitHubReleasePage(documentID), !page.isTag else { return nil }
+        return page.repository
+    }
+
+    static func gitHubReleaseIndex(forTag documentID: String) -> String? {
+        guard let page = gitHubReleasePage(documentID), page.isTag else { return nil }
+        return page.repository
+    }
+
+    private static func gitHubReleasePage(_ id: String) -> (repository: String, isTag: Bool, url: String)? {
+        guard id.hasPrefix("url:https://github.com/"),
+              var components = URLComponents(string: String(id.dropFirst(4))) else { return nil }
+        var parts = components.percentEncodedPath.components(separatedBy: "/")
+        if parts.last == "" { parts.removeLast() }
+        guard parts.count >= 4, parts[0].isEmpty, parts[3] == "releases",
+              parts[1...2].allSatisfy({ $0.range(of: #"^[A-Za-z0-9_.-]+$"#, options: .regularExpression) != nil
+                  && $0 != "." && $0 != ".." }) else { return nil }
+        let isTag = parts.count > 4
+        if isTag {
+            guard parts.count >= 6, parts[4] == "tag", components.query == nil,
+                  parts.dropFirst(5).allSatisfy({ part in
+                      guard let decoded = part.removingPercentEncoding else { return false }
+                      return decoded.components(separatedBy: "/").allSatisfy {
+                          !$0.isEmpty && $0 != "." && $0 != ".." && !$0.contains("\\")
+                      }
+                  }) else { return nil }
+        } else if let query = components.percentEncodedQuery {
+            guard query.range(of: #"^page=[1-9][0-9]*$"#, options: .regularExpression) != nil else { return nil }
+        }
+        components.percentEncodedPath = parts.joined(separator: "/")
+        components.fragment = nil
+        guard let url = components.string else { return nil }
+        return ("\(parts[1])/\(parts[2])".lowercased(), isTag, url)
+    }
+
     private static let trackingParameters: Set<String> = [
         "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "utm_id",
         "utm_source_platform", "utm_creative_format", "utm_marketing_tactic",

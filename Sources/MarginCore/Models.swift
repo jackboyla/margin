@@ -43,18 +43,30 @@ public struct DocumentRecord: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+public struct WebQuoteAnchor: Codable, Equatable, Sendable {
+    public var prefix: String
+    public var suffix: String
+
+    public init(prefix: String, suffix: String) {
+        self.prefix = prefix
+        self.suffix = suffix
+    }
+}
+
 public struct Highlight: Codable, Sendable, Equatable, Identifiable {
     public var id: UUID
     public var documentID: String
     public var quote: String
     public var contextText: String
+    public var webAnchor: WebQuoteAnchor?
     public var createdAt: Date
 
     public init(id: UUID = UUID(), documentID: String, quote: String,
-                contextText: String = "", createdAt: Date = Date()) {
+                contextText: String = "", createdAt: Date = Date(), webAnchor: WebQuoteAnchor? = nil) {
         self.id = id
         self.documentID = documentID
         self.quote = quote
+        self.webAnchor = webAnchor
         self.contextText = contextText
         self.createdAt = createdAt
     }
@@ -157,6 +169,17 @@ public struct LibraryState: Codable, Sendable, Equatable {
         }
         let page = documentID.prefix { $0 != "#" }
         return highlights.filter { $0.documentID.prefix { $0 != "#" } == page }
+    }
+
+    public func browserHighlights(for documentID: String) -> [Highlight] {
+        if let release = SourceIdentity.gitHubReleaseURL(for: documentID) {
+            return highlights.filter { SourceIdentity.gitHubReleaseURL(for: $0.documentID) == release }
+        }
+        let saved = highlights(for: documentID)
+        guard let index = SourceIdentity.gitHubReleaseIndex(for: documentID) else { return saved }
+        return saved + highlights.filter {
+            SourceIdentity.gitHubReleaseIndex(forTag: $0.documentID) == index
+        }
     }
 
     public init(schemaVersion: Int = 1, documents: [DocumentRecord] = [],

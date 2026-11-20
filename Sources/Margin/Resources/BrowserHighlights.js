@@ -1,33 +1,34 @@
 ((request) => {
   const key = Symbol.for("com.jackboylan.margin.highlights");
   const name = "margin-saved-passages";
-  const version = 2;
+  const version = 3;
   const reply = (status, matched = 0) => JSON.stringify({ status, matched });
   if (new URL(request.url).href !== location.href) return reply("changed");
   if (!["text/html", "application/xhtml+xml"].includes(document.contentType) ||
       !document.body || !globalThis.Highlight || !CSS.highlights) return reply("unsupported");
-  const previous = window[key];
-  if (previous?.version === version) return previous.update(request);
-  previous?.dispose?.();
-  if (!request.quotes.length) return reply("owned");
-
   const normalizeText = (value) => value.normalize("NFKC").replace(/\u00ad/g, "")
     .replace(/[\u2010\u2011]/g, "-").replace(/[“”]/g, '"').replace(/[‘’]/g, "'")
     .replace(/\s+/gu, " ").toUpperCase();
   const normalize = value => normalizeText(value).trim();
   const segmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+  if (request.action === "anchor") return captureAnchor();
+  const previous = window[key];
+  if (previous?.version === version) return previous.update(request);
+  previous?.dispose?.();
+  if (!(request.passages ?? request.quotes)?.length) return reply("owned");
+
   const highlight = new Highlight();
   const sheet = new CSSStyleSheet();
   sheet.replaceSync(`::highlight(${name}) { background-color: rgba(255, 210, 45, 0.38); }`);
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
   CSS.highlights.set(name, highlight);
   let url = location.href;
-  let quotes = [];
+  let passages = [];
   let anchors = [];
   let scheduled = 0;
 
   // Normalize complete text runs so combining characters can cross inline markup.
-  function indexText() {
+  function indexText(root) {
     const pieces = [], spans = [];
     let length = 0, run = null, lastWasSpace = true, group = 0;
     const blocks = new WeakMap();
@@ -50,7 +51,7 @@
       blocks.set(element, block);
       return block;
     }
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
       acceptNode(node) {
         if (node.nodeType === Node.ELEMENT_NODE) {
           if (node.matches("script,style,noscript,textarea,input,select,template")) return NodeFilter.FILTER_REJECT;
@@ -104,26 +105,97 @@
     return normalizeText(outside).length === omitted ? at : null;
   }
 
+  function releaseSections() {
+    const result = new Map();
+    if (location.hostname !== "github.com") return result;
+    const route = location.pathname.match(/^(\/[^/]+\/[^/]+\/releases)(?:\/tag\/(.+))?\/?$/);
+    if (!route) return result;
+    if (route[2]) {
+      result.set(location.origin + location.pathname.replace(/\/$/, ""), document.body);
+    } else {
+      for (const section of document.querySelectorAll("section[id^='release-']")) {
+        const tag = section.id.slice("release-".length);
+        const prefix = route[1] + "/tag/";
+        const link = [...section.querySelectorAll('a[href]')].find(a => {
+          if (a.origin !== location.origin || !a.pathname.startsWith(prefix)) return false;
+          try { return decodeURIComponent(a.pathname.slice(prefix.length)) === tag; } catch { return false; }
+        });
+        if (link) result.set(link.origin + link.pathname, section);
+      }
+    }
+    return result;
+  }
+
+  function bounds(index, start, end) {
+    const first = index.spans.find(span => span.start <= start && start < span.end);
+    const last = index.spans.find(span => span.start < end && end <= span.end);
+    if (!first || !last) return null;
+    const from = offset(first, start - first.start + first.skipped, true);
+    const to = offset(last, end - last.start + last.skipped, false);
+    if (from === null || to === null) return null;
+    const startNode = first.nodes.find(item => item.start <= from && from < item.end);
+    const endNode = last.nodes.find(item => item.start < to && to <= item.end);
+    if (!startNode || !endNode) return null;
+    return { first, last, startNode, endNode, from, to };
+  }
+
+  function captureAnchor() {
+    const sel = window.getSelection();
+    const quote = normalize(request.quote);
+    if (!quote || sel?.rangeCount !== 1 || normalize(sel.toString()) !== quote) return reply("unsupported");
+    const range = sel.getRangeAt(0);
+    for (const [releaseURL, root] of releaseSections()) {
+      if (!root.contains(range.commonAncestorContainer)) continue;
+      // Release notes have the same body in list and detail views, with different controls around it.
+      const container = range.commonAncestorContainer;
+      const element = container.nodeType === Node.ELEMENT_NODE ? container : container.parentElement;
+      const prose = element?.closest(".markdown-body");
+      const index = indexText(prose && root.contains(prose) ? prose : root);
+      for (let i = index.text.indexOf(quote); i >= 0; i = index.text.indexOf(quote, i + 1)) {
+        const end = i + quote.length;
+        const b = bounds(index, i, end);
+        if (!b || range.comparePoint(b.startNode.node, b.from - b.startNode.start) !== 0 ||
+            range.comparePoint(b.endNode.node, b.to - b.endNode.start) !== 0) continue;
+        return JSON.stringify({ status: "anchored", releaseURL,
+          prefix: index.text.slice(Math.max(0, i - 96), i).replace(/^[\uDC00-\uDFFF]/, ""),
+          suffix: index.text.slice(end, end + 96).replace(/[\uD800-\uDBFF]$/, "") });
+      }
+    }
+    return reply("unsupported");
+  }
+
+  function match(index, { quote, prefix, suffix }) {
+    const text = index.text;
+    const first = text.indexOf(quote);
+    if (first < 0) return -1;
+    if (!prefix && !suffix) return text.indexOf(quote, first + 1) < 0 ? first : -1;
+    let found = -1;
+    for (let i = first; i >= 0; i = text.indexOf(quote, i + 1)) {
+      if (prefix && !text.endsWith(prefix, i) || suffix && !text.startsWith(suffix, i + quote.length)) continue;
+      if (found >= 0) return -1;
+      found = i;
+    }
+    return found;
+  }
+
   function paint() {
     if (scheduled) clearTimeout(scheduled);
     scheduled = 0;
-    if (location.href !== url) { highlight.clear(); anchors = []; return; }
-    if (!quotes.length) { highlight.clear(); anchors = []; return; }
-    const index = indexText();
+    if (location.href !== url || !passages.length) { highlight.clear(); anchors = []; return; }
+    const sections = passages.some(p => p.releaseURL) ? releaseSections() : null;
+    const indexes = new Map();
     const next = [];
-    for (const quote of quotes) {
-      const start = index.text.indexOf(quote);
-      if (start < 0 || index.text.indexOf(quote, start + 1) !== -1) continue;
-      const end = start + quote.length;
-      const first = index.spans.find(span => span.start <= start && start < span.end);
-      const last = index.spans.find(span => span.start < end && end <= span.end);
-      if (!first || !last) continue;
-      const from = offset(first, start - first.start + first.skipped, true);
-      const to = offset(last, end - last.start + last.skipped, false);
-      if (from === null || to === null) continue;
-      const startNode = first.nodes.find(item => item.start <= from && from < item.end);
-      const endNode = last.nodes.find(item => item.start < to && to <= item.end);
-      if (!startNode || !endNode) continue;
+    for (const passage of passages) {
+      const { quote, releaseURL } = passage;
+      const root = releaseURL ? sections.get(releaseURL) : document.body;
+      if (!root) continue;
+      if (!indexes.has(root)) indexes.set(root, indexText(root));
+      const index = indexes.get(root);
+      const start = match(index, passage);
+      if (start < 0) continue;
+      const b = bounds(index, start, start + quote.length);
+      if (!b) continue;
+      const { first, last, startNode, endNode, from, to } = b;
       // Split around omitted text so the custom highlight also skips its glyphs.
       let head = startNode.node, headOffset = from - startNode.start;
       function addRange(tail, tailOffset) {
@@ -135,7 +207,7 @@
           range.setStart(head, headOffset);
           range.setEnd(tail, tailOffset);
         }
-        next.push({ range, quote });
+        next.push({ range, quote, passage });
       }
       if (first.group !== last.group) {
         let previous = first;
@@ -177,13 +249,13 @@
     version,
     update(next) {
       if (new URL(next.url).href !== location.href) return reply("changed");
-      const nextQuotes = [...new Set(next.quotes.map(normalize).filter(Boolean))];
-      if (!nextQuotes.length) { state.dispose(); return reply("owned"); }
+      const items = next.passages ?? next.quotes.map(quote => ({ quote }));
+      passages = items.map(p => ({ ...p, quote: normalize(p.quote) })).filter(p => p.quote);
+      if (!passages.length) { state.dispose(); return reply("owned"); }
       url = location.href;
-      quotes = nextQuotes;
       // Stylesheet rules can change visibility without a DOM mutation.
       paint();
-      return reply("owned", new Set(anchors.map(item => item.quote)).size);
+      return reply("owned", new Set(anchors.map(item => item.passage)).size);
     },
     dispose() {
       observer.disconnect();

@@ -222,7 +222,7 @@ final class AppModel: ObservableObject {
                     error = "Select text in the source window, then press Control–Shift–Space to capture it."
                     return
                 }
-                try await persistHighlight(source)
+                try await persistHighlight(source, target: capturedWindow?.target)
                 notice = "Highlight saved on this Mac."
                 error = nil
                 onLibraryChange?()
@@ -234,21 +234,36 @@ final class AppModel: ObservableObject {
         try capture.requireSelectionAccess()
         let pinned = try capture.currentTarget()
         let result = try await capture.capture(target: pinned, attachmentDirectory: attachments, persistImage: false)
-        try await persistHighlight(result.context)
+        try await persistHighlight(result.context, target: result.target)
         onCapture?(result)
         onLibraryChange?()
     }
 
-    private func persistHighlight(_ source: SourceContext) async throws {
+    private func persistHighlight(_ source: SourceContext, target: WindowTarget?) async throws {
         guard let quote = source.selection?.trimmingCharacters(in: .whitespacesAndNewlines), !quote.isEmpty else {
             try capture.requireSelectionAccess()
             throw NSError(domain: "Margin", code: 1,
                           userInfo: [NSLocalizedDescriptionKey: "Margin couldn’t read selected text. Select a passage in the source window and try again."])
         }
+        var document = source
+        var anchor: WebQuoteAnchor?
+        if let target, target.url == source.url,
+           let selection = try await capture.releaseSelection(target: target, quote: quote) {
+            document.url = selection.url
+            document.documentID = SourceIdentity.documentID(bundleID: source.bundleID, title: source.title, url: selection.url)
+            anchor = selection.anchor
+        }
         try await update { library in
-            Self.upsert(source, in: &library)
-            if !library.highlights(for: source.documentID).contains(where: { $0.quote == quote }) {
-                library.highlights.append(Highlight(documentID: source.documentID, quote: quote, contextText: source.text))
+            Self.upsert(document, in: &library)
+            let saved = library.highlights(for: document.documentID)
+            if saved.contains(where: { $0.quote == quote && (anchor == nil || $0.webAnchor == anchor) }) { return }
+            if let anchor,
+               let legacy = saved.first(where: { $0.quote == quote && $0.webAnchor == nil }),
+               let index = library.highlights.firstIndex(where: { $0.id == legacy.id }) {
+                library.highlights[index].documentID = document.documentID
+                library.highlights[index].webAnchor = anchor
+            } else {
+                library.highlights.append(Highlight(documentID: document.documentID, quote: quote, contextText: source.text, webAnchor: anchor))
             }
         }
     }
