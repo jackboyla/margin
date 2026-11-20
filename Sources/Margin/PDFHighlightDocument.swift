@@ -6,9 +6,8 @@ import MarginCore
 import PDFKit
 
 enum PDFHighlightDocument {
-    /// PDF incremental update to append to the original bytes. An empty update leaves all source objects intact.
-    static func annotationUpdate(for original: Data, quotes: [String], notes: [StickyNote] = []) -> Data? {
-        guard let document = PDFDocument(data: original), !document.isLocked,
+    static func annotatablePages(in document: PDFDocument) -> [PDFPage]? {
+        guard !document.isLocked,
               let catalog = document.documentRef?.catalog else { return nil }
         // Form values belong to the live viewer and may differ from the downloaded file.
         var form: CGPDFObjectRef?
@@ -18,6 +17,12 @@ enum PDFHighlightDocument {
         guard pages.count == document.pageCount,
               !pages.contains(where: { $0.annotations.contains(where: { $0.type == "Widget" }) })
         else { return nil }
+        return pages
+    }
+
+    /// PDF incremental update to append to the original bytes. An empty update leaves all source objects intact.
+    static func annotationUpdate(for original: Data, quotes: [String], notes: [StickyNote] = []) -> Data? {
+        guard let document = PDFDocument(data: original), let pages = annotatablePages(in: document) else { return nil }
         guard !quotes.isEmpty || !notes.isEmpty else { return Data() }
         let text = quotes.isEmpty ? [] : pages.map { $0.string ?? "" }
         var annotations: [[String: Any]] = []
@@ -55,7 +60,7 @@ enum PDFHighlightDocument {
             guard let number = note.anchor.page, number > 0, number <= pages.count,
                   (0...1).contains(note.anchor.x), (0...1).contains(note.anchor.y) else { continue }
             let page = pages[number - 1]
-            guard page.rotation == 0, let mark = stickyAnnotation(note, on: page.bounds(for: .cropBox)) else { continue }
+            guard page.rotation == 0, let mark = stickyAnnotation(note, pageIndex: number - 1, crop: page.bounds(for: .cropBox)) else { continue }
             annotations.append(mark)
         }
 
@@ -72,8 +77,8 @@ enum PDFHighlightDocument {
         return suffix
     }
 
-    private static func stickyAnnotation(_ note: StickyNote, on crop: CGRect) -> [String: Any]? {
-        guard crop.width > 16, crop.height > 16, !crop.isInfinite, let number = note.anchor.page else { return nil }
+    private static func stickyAnnotation(_ note: StickyNote, pageIndex: Int, crop: CGRect) -> [String: Any]? {
+        guard crop.width > 16, crop.height > 16, !crop.isInfinite else { return nil }
         // Draw with the system fonts so the saved appearance includes glyphs outside PDF's standard fonts.
         let text = NSAttributedString(string: note.text, attributes: [.font: NSFont.systemFont(ofSize: 11),
                                                                      .foregroundColor: NSColor.black])
@@ -96,7 +101,7 @@ enum PDFHighlightDocument {
 
         let left = min(crop.minX + note.anchor.x * crop.width, crop.maxX - width)
         let top = max(crop.maxY - note.anchor.y * crop.height, crop.minY + height)
-        return ["page": number - 1, "bounds": [left, top - height, left + width, top],
+        return ["page": pageIndex, "bounds": [left, top - height, left + width, top],
                 "text": note.text, "id": note.id.uuidString, "appearance": (data as Data).base64EncodedString()]
     }
 

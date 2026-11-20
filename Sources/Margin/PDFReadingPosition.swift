@@ -138,9 +138,11 @@ struct PDFReadingPosition {
     }
 
     func stickyAnchor(at point: CGPoint, in bytes: Data) -> StickyAnchor? {
-        guard let document = PDFDocument(data: bytes), pageNumber > 0, pageNumber <= document.pageCount,
-              let page = document.page(at: pageNumber - 1), page.rotation == 0,
-              let text = page.string as NSString? else { return nil }
+        guard let document = PDFDocument(data: bytes), let pages = PDFHighlightDocument.annotatablePages(in: document),
+              pageNumber > 0, pageNumber <= pages.count else { return nil }
+        let page = pages[pageNumber - 1]
+        guard page.rotation == 0, let string = page.string else { return nil }
+        let text = string as NSString
         // Chrome clips page-group frames to the viewport. Its text-range bounds stay in full screen coordinates.
         let samples = lines.compactMap { line, screen -> (paper: CGRect, screen: CGRect)? in
             let match = text.range(of: line, options: .literal)

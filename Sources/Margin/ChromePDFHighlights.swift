@@ -40,9 +40,7 @@ final class ChromePDFHighlights {
 
     func stickyAnchor(paper: URL, in window: AXUIElement, at point: CGPoint) async throws -> StickyAnchor? {
         let sample = await Task.detached(priority: .userInitiated) {
-            let input = PDFInputSnapshot()
-            let position = PDFReadingPosition.current(in: window, at: point)
-            return PDFInputSnapshot() == input ? position : nil
+            PDFReadingPosition.current(in: window, at: point)
         }.value
         guard let sample else { return nil }
         let source = try await originalPDF(for: paper)
