@@ -306,7 +306,7 @@ struct SidebarView: View {
                                         Label(note.text, systemImage: "note.text").lineLimit(4)
                                             .frame(maxWidth: .infinity, alignment: .leading)
                                     }.buttonStyle(.plain).help("Edit sticky note")
-                                    SourceLink(value: note.url)
+                                    SourceLink(value: note.url, page: note.anchor.page)
                                 }.padding(12).background(ReadingStyle.surface, in: RoundedRectangle(cornerRadius: 10))
                             }
                             if notes.isEmpty { empty(search.isEmpty ? "Point at a Chrome page and press ⌃⇧N to add a sticky note." : "No matching notes.") }
@@ -456,19 +456,27 @@ private struct SendButtonStyle: ButtonStyle {
 private struct SourceLink: View {
     let value: String?
     var iconOnly = false
+    var page: Int?
+
+    private var destination: URL? {
+        guard let value, var parts = URLComponents(string: value),
+              ["http", "https"].contains(parts.scheme?.lowercased() ?? ""),
+              parts.host?.isEmpty == false, parts.user == nil, parts.password == nil else { return nil }
+        if let page { parts.fragment = "page=\(page)" }
+        return parts.url
+    }
 
     var body: some View {
-        if let value, let url = URL(string: value),
-           ["http", "https"].contains(url.scheme?.lowercased() ?? ""),
-           let host = url.host, !host.isEmpty, url.user == nil, url.password == nil {
+        if let url = destination, let host = url.host {
+            let title = page.map { "\(host) · Page \($0)" } ?? host
             Link(destination: url) {
                 if iconOnly {
                     Image(systemName: "globe").frame(width: 26, height: 26)
                 } else {
-                    Label(host, systemImage: "arrow.up.right.square").lineLimit(1)
+                    Label(title, systemImage: "arrow.up.right.square").lineLimit(1)
                 }
             }.font(.caption2).help("Open source: \(url.absoluteString)")
-                .accessibilityLabel("Open source: \(host)")
+                .accessibilityLabel("Open source: \(title)")
         }
     }
 }

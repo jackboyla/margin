@@ -162,9 +162,9 @@ public struct LibraryState: Codable, Sendable, Equatable {
     public var stickyNotes: [StickyNote]
 
     public func highlights(for documentID: String) -> [Highlight] {
-        // GitHub links to headings, comments and lines within the same document.
-        // Compare the stored IDs here so highlights saved with older fragment URLs still appear.
-        guard documentID.hasPrefix("url:https://github.com/") else {
+        // A GitHub section or an arXiv page number addresses a spot in the same document.
+        // Compare stored IDs so highlights saved from either URL remain visible.
+        guard documentID.hasPrefix("url:https://github.com/") || documentID.hasPrefix("url:https://arxiv.org/abs/") else {
             return highlights.filter { $0.documentID == documentID }
         }
         let page = documentID.prefix { $0 != "#" }

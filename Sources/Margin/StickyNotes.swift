@@ -8,7 +8,7 @@ enum StickyPlacementError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .outsidePage: return "Point at a webpage in Chrome to place a sticky note."
-        case .outsidePaper: return "Point inside a readable page of the arXiv PDF to place a sticky note."
+        case .outsidePaper: return "Margin couldn’t locate that spot on the PDF page. If Chrome’s drawing tools are active, close them and try again."
         case .unsupported: return "Sticky notes work on regular webpages and readable arXiv PDFs in Chrome."
         case .automation: return "Allow browser Automation for Margin and enable Chrome → View → Developer → Allow JavaScript from Apple Events."
         case .differentPage: return "Open this note’s original page in Chrome to move it."
@@ -71,7 +71,7 @@ final class StickyNotesController {
             do {
                 try model.capture.requireSelectionAccess()
                 let pinned = try model.capture.currentTarget()
-                let target = try await model.capture.resolve(target: pinned)
+                let target = try await model.capture.resolve(target: pinned, askForAutomation: true)
                 guard model.capture.isChromiumBrowser(target.bundleID), let url = target.url,
                       ["http", "https"].contains(URL(string: url)?.scheme ?? "") else { throw StickyPlacementError.outsidePage }
                 if let moving, moving.url != WindowCapture.stickyURL(url) { throw StickyPlacementError.differentPage }

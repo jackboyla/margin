@@ -1,0 +1,71 @@
+name: PDF reading check
+on:
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: App revision to build (defaults to this workflow's revision)
+        required: false
+  workflow_call:
+    inputs:
+      installer:
+        description: Artifact containing the release DMG and its checksum
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  reading:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-26, paper: '2506.01844' }
+          - { os: xcode-27, paper: '2506.01844' }
+          - { os: macos-26, paper: '1706.03762' }
+    env:
+      DEVELOPER_DIR: ${{ matrix.os == 'xcode-27' && '/Applications/Xcode.app/Contents/Developer' || '/Applications/Xcode_26.3.app/Contents/Developer' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        if: ${{ !inputs.installer }}
+        with:
+          ref: ${{ inputs.app_ref || github.sha }}
+          path: app-source
+      - name: Package Margin
+        if: ${{ !inputs.installer }}
+        working-directory: app-source
+        run: bash scripts/build-app.sh
+      - uses: actions/download-artifact@v7
+        if: inputs.installer
+        with:
+          name: ${{ inputs.installer }}
+          path: installer
+      - name: Install the release candidate
+        if: inputs.installer
+        working-directory: installer
+        run: |
+          shasum -a 256 -c ./*.sha256
+          mount="$RUNNER_TEMP/margin-dmg"
+          mkdir -p "$mount" ../app-source/dist
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount" ./*.dmg
+          trap 'hdiutil detach "$mount"' EXIT
+          ditto "$mount/Margin.app" ../app-source/dist/Margin.app
+          codesign --verify --strict ../app-source/dist/Margin.app
+      - name: Install UI driver
+        run: |
+          command -v tesseract || brew install tesseract
+          python3 -m venv "$RUNNER_TEMP/qa"
+          "$RUNNER_TEMP/qa/bin/pip" install pyautogui==0.9.54 Pillow==13.0.0 pytesseract==0.3.13 pymupdf==1.28.2
+      - name: Read and annotate the paper
+        run: |
+          sw_vers
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' '/Applications/Google Chrome.app/Contents/Info.plist'
+          "$RUNNER_TEMP/qa/bin/python" -u scripts/qa/pdf-reading.py app-source/dist/Margin.app ${{ matrix.paper }}
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pdf-reading-${{ matrix.os }}-${{ matrix.paper }}
+          path: ${{ runner.temp }}/pdf-reading
+          if-no-files-found: warn

@@ -16,7 +16,7 @@ Local builds target the current architecture unless `MARGIN_UNIVERSAL=1` request
 
 ## GitHub Releases
 
-Pushing a `v*` tag, such as `v0.1.0`, runs the release workflow. It runs tests, builds the universal app, packages the DMG and checksum, and publishes both assets through the repository's `GITHUB_TOKEN` with `contents: write`. Versions with a suffix become prereleases. Regular checks also upload DMG artifacts; those workflow artifacts require GitHub access and are separate from public release downloads.
+Pushing a `v*` tag, such as `v0.1.0`, runs the release workflow. It tests the code, packages the universal DMG, and installs that exact app on disposable macOS 26 and 27 desktops. The tests open two arXiv papers in Chrome and check visible highlights and sticky notes through a restart. All three reading sessions must pass before GitHub publishes the DMG and checksum. Versions with a suffix become prereleases. You can also run the PDF reading check from the Actions tab.
 
 Releases work without Apple credentials: they use ad-hoc signatures and say that they are not notarized. Gatekeeper can block these downloads. Check the signing notice in each release before distributing it.
 

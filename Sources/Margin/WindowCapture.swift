@@ -137,9 +137,9 @@ final class WindowCapture {
         return target
     }
 
-    func resolve(target: WindowTarget) async throws -> WindowTarget {
+    func resolve(target: WindowTarget, askForAutomation: Bool = false) async throws -> WindowTarget {
         // Margin can be frontmost while its last source window navigates to a different page.
-        try await queued { try self.validatedSource(target, matchDocument: false).target }
+        try await queued { try self.validatedSource(target, askForAutomation: askForAutomation, matchDocument: false).target }
     }
 
     private nonisolated static let highlightLog = Logger(subsystem: "com.jackboylan.margin", category: "BrowserHighlights")
@@ -148,6 +148,41 @@ final class WindowCapture {
     private nonisolated static let pdfViewportScript = MarginResources.script("PDFViewport")
     private nonisolated static let stickyScript = MarginResources.script("BrowserStickyNotes")
     private let pdfRenderer = ChromePDFHighlights()
+    private var pdfAccessibilityRequest: (pid: pid_t, time: ContinuousClock.Instant)?
+
+    private func pdfPosition(in target: WindowTarget, excluding previous: PDFReadingPosition? = nil,
+                             at point: CGPoint? = nil) async throws -> PDFReadingPosition? {
+        let clock = ContinuousClock()
+        let app = AXUIElementCreateApplication(target.pid)
+        func requestFullTree() async {
+            pdfAccessibilityRequest = (target.pid, clock.now)
+            // Chrome's basic tree can omit checkbox states and PDF text ranges.
+            // It publishes the full tree about two seconds after this assistive-technology request.
+            await Task.detached(priority: .userInitiated) {
+                _ = AXUIElementSetAttributeValue(app, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+            }.value
+        }
+        func sample() async throws -> PDFReadingPosition? {
+            try await Task.detached(priority: .userInitiated) {
+                guard let window = self.element(app, kAXFocusedWindowAttribute), self.matches(window, frame: target.frame)
+                else { throw WindowCaptureError.sourceChanged }
+                return PDFReadingPosition.current(in: window, excluding: previous, at: point)
+            }.value
+        }
+        guard accessibilityPermission else { return nil }
+        if pdfAccessibilityRequest?.pid != target.pid { await requestFullTree() }
+        if let result = try await sample() { return result }
+        guard previous == nil else { return nil }
+        if let request = pdfAccessibilityRequest, clock.now >= request.time + .seconds(30) { await requestFullTree() }
+        // Background painting already retries. A first note must keep the user's original point while Chrome wakes.
+        if point != nil, let request = pdfAccessibilityRequest {
+            while clock.now < request.time + .seconds(4) {
+                try await Task.sleep(for: .milliseconds(250))
+                if let result = try await sample() { return result }
+            }
+        }
+        return nil
+    }
 
     func releaseSelection(target: WindowTarget, quote: String) async throws -> (url: String, anchor: WebQuoteAnchor)? {
         guard isChromiumBrowser(target.bundleID), let url = target.url,
@@ -175,12 +210,7 @@ final class WindowCapture {
                 request["url"] = url
                 return try await self.browserCommand(target, template: template, request: request, input: input).status
             } position: { excluding in
-                try await Task.detached(priority: .utility) {
-                    let app = AXUIElementCreateApplication(target.pid)
-                    guard let win = self.element(app, kAXFocusedWindowAttribute), self.matches(win, frame: target.frame)
-                    else { throw WindowCaptureError.sourceChanged }
-                    return PDFReadingPosition.current(in: win, excluding: excluding)
-                }.value
+                try await self.pdfPosition(in: target, excluding: excluding)
             }
             if paint != .unsupported { return paint }
         }
@@ -214,7 +244,7 @@ final class WindowCapture {
         let pinned = try currentTarget()
         guard isChromiumBrowser(pinned.bundleID), pinned.frame.contains(point),
               NSWorkspace.shared.frontmostApplication?.processIdentifier == pinned.pid else { throw StickyPlacementError.outsidePage }
-        let target = try await resolve(target: pinned)
+        let target = try await resolve(target: pinned, askForAutomation: true)
         if let expected, expected.windowID != target.windowID || expected.pid != target.pid ||
             expected.url != target.url || expected.frame != target.frame { throw WindowCaptureError.sourceChanged }
         guard let url = target.url, let scheme = URL(string: url)?.scheme,
@@ -228,9 +258,8 @@ final class WindowCapture {
             guard let template = Self.pdfViewportScript,
                   try await browserCommand(target, template: template, request: ["url": url, "action": "status", "token": "placement"]).status != "unsupported"
             else { throw StickyPlacementError.automation }
-            guard let window = element(AXUIElementCreateApplication(target.pid), kAXFocusedWindowAttribute),
-                  matches(window, frame: target.frame),
-                  let placement = try await pdfRenderer.stickyAnchor(paper: paper, in: window, at: point)
+            guard let position = try await pdfPosition(in: target, at: point),
+                  let placement = try await pdfRenderer.stickyAnchor(paper: paper, position: position, at: point)
             else { throw StickyPlacementError.outsidePaper }
             anchor = placement
         } else {

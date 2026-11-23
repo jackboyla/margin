@@ -38,14 +38,10 @@ final class ChromePDFHighlights {
         return parts.url
     }
 
-    func stickyAnchor(paper: URL, in window: AXUIElement, at point: CGPoint) async throws -> StickyAnchor? {
-        let sample = await Task.detached(priority: .userInitiated) {
-            PDFReadingPosition.current(in: window, at: point)
-        }.value
-        guard let sample else { return nil }
+    func stickyAnchor(paper: URL, position: PDFReadingPosition, at point: CGPoint) async throws -> StickyAnchor? {
         let source = try await originalPDF(for: paper)
         return await Task.detached(priority: .utility) {
-            sample.stickyAnchor(at: point, in: source.bytes)
+            position.stickyAnchor(at: point, in: source.bytes)
         }.value
     }
 
@@ -83,17 +79,20 @@ final class ChromePDFHighlights {
             retry = (token, Date().addingTimeInterval(delay))
             return .deferred
         }
-        guard let source = try await position(nil), isCurrent() else {
-            return deferPaint("source position unavailable", delay: 2)
-        }
+        let positionBeforeUpdate = try await position(nil)
+        guard isCurrent() else { return .deferred }
+        guard let source = positionBeforeUpdate else { return deferPaint("source position unavailable", delay: 2) }
         let base: OriginalPDF
         do {
             base = try await originalPDF(for: paper)
         } catch {
             return deferPaint("paper download unavailable", delay: 8)
         }
-        let update = await Task.detached(priority: .utility) {
-            PDFHighlightDocument.annotationUpdate(for: base.bytes, quotes: quotes, notes: notes)
+        let (update, crop) = await Task.detached(priority: .utility) {
+            let pdf = CGDataProvider(data: base.bytes as CFData).flatMap { CGPDFDocument($0) }
+            let page = pdf?.page(at: source.pageNumber)
+            let crop = page?.rotationAngle == 0 ? page?.getBoxRect(.cropBox) : nil
+            return (PDFHighlightDocument.annotationUpdate(for: base.bytes, quotes: quotes, notes: notes), crop)
         }.value
         guard isCurrent() else { return .deferred }
         if status == "original", update?.isEmpty != false {
@@ -130,16 +129,24 @@ final class ChromePDFHighlights {
                 let deadline = Date().addingTimeInterval(8)
                 var candidate: PDFReadingPosition?
                 var displacement: CGSize?
+                var zoomCorrection: CGFloat?
                 // The PDF wrapper loads before Chrome publishes the requested page and its text bounds.
                 while isCurrent(), Date() < deadline, ["pending", "ready"].contains(state) {
                     if state == "ready", let sample = try await position(source), sample.pageNumber == source.pageNumber {
-                        if sample.zoomPercent != source.zoomPercent {
-                            candidate = sample
-                            break
-                        }
-                        if let delta = sample.displacement(from: source) {
+                        if let delta = sample.displacement(from: source, crop: crop) {
                             candidate = sample
                             displacement = delta
+                            break
+                        }
+                        let measured = sample.zoomCorrection(to: source)
+                        if let measured, abs(measured - 1) > 0.0001 {
+                            candidate = sample
+                            zoomCorrection = measured
+                            break
+                        }
+                        if sample.zoomPercent != source.zoomPercent {
+                            candidate = sample
+                            zoomCorrection = CGFloat(source.zoomPercent) / CGFloat(sample.zoomPercent)
                             break
                         }
                     }
@@ -150,8 +157,8 @@ final class ChromePDFHighlights {
                     reason = "staged page did not provide matching landmarks"
                     break
                 }
-                if candidate.zoomPercent != source.zoomPercent {
-                    zoom *= Double(source.zoomPercent) / Double(candidate.zoomPercent)
+                if let zoomCorrection {
+                    zoom *= zoomCorrection
                     continue
                 }
                 guard let delta = displacement else { break }
@@ -159,7 +166,7 @@ final class ChromePDFHighlights {
                     let input = PDFInputSnapshot()
                     let stillAligned = await Task.detached(priority: .userInitiated) {
                         guard let original = source.refreshed(), let staged = candidate.refreshed(),
-                              let difference = staged.displacement(from: original) else { return false }
+                              let difference = staged.displacement(from: original, crop: crop) else { return false }
                         return abs(difference.width) <= 1 && abs(difference.height) <= 1
                     }.value
                     guard stillAligned, isCurrent() else {

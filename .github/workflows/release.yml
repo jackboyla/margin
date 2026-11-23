@@ -3,7 +3,7 @@ on:
   push:
     tags: ['v*']
 permissions:
-  contents: write
+  contents: read
 jobs:
   browser:
     runs-on: ubuntu-24.04
@@ -64,12 +64,11 @@ jobs:
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
         run: bash scripts/package-dmg.sh
-      - name: Publish GitHub release
+      - name: Prepare release notes
         env:
-          GH_TOKEN: ${{ github.token }}
           NOTARY_CONFIGURED: ${{ secrets.NOTARY_APPLE_ID != '' }}
         run: |
-          NOTES="$RUNNER_TEMP/release-notes.md"
+          NOTES=dist/release-notes.md
           printf '%s\n\n' 'Download the DMG, open it, and drag Margin to Applications. Requires macOS 26 or later; supports Apple silicon and Intel.' > "$NOTES"
           if [ -n "${MARGIN_DISTRIBUTION_SIGNING:-}" ]; then
             if [ "$NOTARY_CONFIGURED" = true ]; then
@@ -80,11 +79,14 @@ jobs:
           else
             echo 'This public beta is ad-hoc signed and is not notarized by Apple. macOS may block opening it. Only proceed if you trust this source; see the README for installation and permission setup.' >> "$NOTES"
           fi
-          ARGS=(--verify-tag --title "Margin $MARGIN_VERSION" --notes-file "$NOTES")
-          if [[ "$MARGIN_VERSION" == *-* ]]; then
-            ARGS+=(--prerelease)
-          fi
-          gh release create "$GITHUB_REF_NAME" dist/*.dmg dist/*.sha256 "${ARGS[@]}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: Margin-release
+          path: |
+            dist/*.dmg
+            dist/*.sha256
+            dist/release-notes.md
+          if-no-files-found: error
       - name: Remove signing material
         if: always()
         run: |
@@ -92,3 +94,26 @@ jobs:
             security delete-keychain "$RUNNER_TEMP/margin-signing.keychain-db"
           fi
           rm -f "$RUNNER_TEMP/margin-certificate.p12"
+  reading:
+    needs: macos
+    uses: ./.github/workflows/pdf-reading.yml
+    with:
+      installer: Margin-release
+  publish:
+    needs: reading
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: Margin-release
+      - name: Publish the tested installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sha256sum --check ./*.sha256
+          version="${GITHUB_REF_NAME#v}"
+          args=(--repo "$GITHUB_REPOSITORY" --verify-tag --title "Margin $version" --notes-file release-notes.md)
+          if [[ "$version" == *-* ]]; then args+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" ./*.dmg ./*.sha256 "${args[@]}"

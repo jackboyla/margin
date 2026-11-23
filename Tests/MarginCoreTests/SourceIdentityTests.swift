@@ -14,6 +14,14 @@ final class SourceIdentityTests: XCTestCase {
         XCTAssertNotEqual(identity("https://arxiv.org/abs/2401.12345"), versioned)
         XCTAssertEqual(identity("https://arxiv.org/pdf/hep-th/9901001v3.pdf"),
                        identity("https://arxiv.org/abs/hep-th/9901001v3"))
+        let pdf = "https://arxiv.org/pdf/2401.12345v2"
+        let fromPage = Highlight(documentID: identity(pdf + "#page=2"), quote: "first passage")
+        let fromPaper = Highlight(documentID: versioned, quote: "second passage")
+        let library = LibraryState(highlights: [fromPage, fromPaper])
+        XCTAssertEqual(library.browserHighlights(for: versioned), [fromPage, fromPaper])
+        XCTAssertEqual(library.browserHighlights(for: identity(pdf + "#zoom=125")), [fromPage, fromPaper])
+        XCTAssertTrue(library.browserHighlights(for: identity(pdf + "?revision=other")).isEmpty)
+        XCTAssertTrue(library.browserHighlights(for: identity("https://arxiv.org/pdf/2401.12345v1")).isEmpty)
     }
 
     func testMeaningfulQueryAndFragmentRoutesRemainDistinct() {

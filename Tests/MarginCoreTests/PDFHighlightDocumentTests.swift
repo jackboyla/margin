@@ -26,6 +26,14 @@ final class PDFHighlightDocumentTests: XCTestCase {
         XCTAssertEqual(confirmed, .current)
     }
 
+    func testViewerWithoutInkControlsCanBeReplaced() {
+        XCTAssertTrue(PDFReadingPosition.canReplaceViewer(editControls: [:]))
+        let controls = ["Draw": true, "Undo": true, "Redo": true]
+        XCTAssertTrue(PDFReadingPosition.canReplaceViewer(editControls: controls))
+        XCTAssertFalse(PDFReadingPosition.canReplaceViewer(editControls: ["Draw": true]))
+        XCTAssertFalse(PDFReadingPosition.canReplaceViewer(editControls: controls.merging(["Undo": false]) { $1 }))
+    }
+
     func testReadingPositionRequiresAgreementAcrossLines() {
         let original: [String: CGRect] = [
             "heading": CGRect(x: 90, y: 100, width: 130, height: 20),
@@ -38,6 +46,9 @@ final class PDFHighlightDocumentTests: XCTestCase {
         staged["reference"]?.origin.x += 1011
         staged["wrapped link"]?.size.width -= 6
         XCTAssertEqual(PDFReadingPosition.lineDisplacement(staged, from: original), CGSize(width: 0, height: 447))
+        var smaller = original.mapValues { $0.applying(CGAffineTransform(scaleX: 0.994, y: 0.994)) }
+        smaller["wrapped link"]?.size.width -= 10
+        XCTAssertEqual(PDFReadingPosition.lineScale(smaller, to: original) ?? 0, 1 / 0.994, accuracy: 0.00001)
         staged["caption"]?.origin.y += 40
         XCTAssertNil(PDFReadingPosition.lineDisplacement(staged, from: original))
     }
@@ -50,6 +61,22 @@ final class PDFHighlightDocumentTests: XCTestCase {
             let screen = CGRect(x: 140, y: -400 + 2 * (crop.maxY - paper.maxY), width: 320, height: 20)
             return (paper, screen)
         }
+        let viewport = CGRect(x: 0, y: 0, width: 1000, height: 900)
+        let full = CGRect(x: 100, y: -400, width: 800, height: 1200)
+        let edges = PDFReadingPosition.PageEdges(visible: full.intersection(viewport), viewport: viewport)
+        XCTAssertEqual(edges?.fullFrame(for: crop), full)
+        let staged = full.offsetBy(dx: 0, dy: 410)
+        let stagedEdges = PDFReadingPosition.PageEdges(visible: staged.intersection(viewport), viewport: viewport)
+        XCTAssertEqual(stagedEdges?.fullFrame(for: crop), staged)
+        let clippedAtBothEnds = CGRect(x: 100, y: 0, width: 800, height: 900)
+        XCTAssertNil(PDFReadingPosition.PageEdges(visible: clippedAtBothEnds, viewport: viewport)?.fullFrame(for: crop))
+        let center = CGPoint(x: full.midX, y: full.midY)
+        let upper = CGPoint(x: full.midX, y: full.midY - 180)
+        let lower = CGPoint(x: full.midX, y: full.midY + 180)
+        XCTAssertFalse(PDFReadingPosition.confirmsOrientation([], in: full, tolerance: 2))
+        XCTAssertFalse(PDFReadingPosition.confirmsOrientation([(center, center), (upper, lower), (lower, upper)],
+                                                             in: full, tolerance: 2))
+        XCTAssertTrue(PDFReadingPosition.confirmsOrientation([(center, center), (upper, upper)], in: full, tolerance: 2))
         let cursor = CGPoint(x: 300, y: 200)
         let note = try XCTUnwrap(PDFReadingPosition.stickyAnchor(at: cursor, page: 2, crop: crop, samples: samples))
         XCTAssertEqual(note, StickyAnchor(x: 0.25, y: 0.5, page: 2))
